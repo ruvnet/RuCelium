@@ -16,7 +16,10 @@ serde = { workspace = true }
 toml = { workspace = true }
 
 [dev-dependencies]
-rufield-adapters = { workspace = true }
+# Path-only (no version): stripped at `cargo publish`, breaking the
+# fusion <-> adapters circular dev-dependency so fusion can publish
+# without rufield-adapters existing on crates.io.
+rufield-adapters = { path = "../rufield-adapters" }
 
 [lints]
 workspace = true
