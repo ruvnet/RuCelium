@@ -36,7 +36,9 @@ const UPSTREAM: &str = "http://127.0.0.1:8080";
 
 fn live_config() -> ViewerConfig {
     ViewerConfig {
-        source: SourceMode::Live { upstream: UPSTREAM.to_string() },
+        source: SourceMode::Live {
+            upstream: UPSTREAM.to_string(),
+        },
         ..ViewerConfig::default()
     }
 }
@@ -102,7 +104,10 @@ async fn api_run_is_deterministic_and_meets_section31() {
             // provenance receipt
             let r = &ev["receipt"];
             assert!(r["raw_hash"].as_str().unwrap().starts_with("sha256:"));
-            assert!(r["signature_hex"].as_str().is_some(), "event must be signed");
+            assert!(
+                r["signature_hex"].as_str().is_some(),
+                "event must be signed"
+            );
             assert_eq!(r["verified"], true, "signature must verify");
             assert_eq!(r["fusable"], true, "event must be §11-fusable");
         }
@@ -126,7 +131,11 @@ async fn api_run_is_deterministic_and_meets_section31() {
 #[tokio::test]
 async fn events_stream_emits_meta_then_frames_in_order() {
     // Stop at end-of-demo so the stream terminates and we can read it fully.
-    let router = app(ViewerConfig { tick_ms: 1, loop_stream: false, ..ViewerConfig::default() });
+    let router = app(ViewerConfig {
+        tick_ms: 1,
+        loop_stream: false,
+        ..ViewerConfig::default()
+    });
     let resp = router
         .oneshot(
             Request::builder()
@@ -148,7 +157,11 @@ async fn events_stream_emits_meta_then_frames_in_order() {
     assert!(first_frame < done_pos, "frames precede done");
 
     // Determinism: a second identical stream is byte-identical.
-    let router2 = app(ViewerConfig { tick_ms: 1, loop_stream: false, ..ViewerConfig::default() });
+    let router2 = app(ViewerConfig {
+        tick_ms: 1,
+        loop_stream: false,
+        ..ViewerConfig::default()
+    });
     let resp2 = router2
         .oneshot(
             Request::builder()
@@ -159,7 +172,10 @@ async fn events_stream_emits_meta_then_frames_in_order() {
         .await
         .unwrap();
     let bytes2 = resp2.into_body().collect().await.unwrap().to_bytes();
-    assert_eq!(bytes, bytes2, "SSE stream must be deterministic for a fixed seed");
+    assert_eq!(
+        bytes, bytes2,
+        "SSE stream must be deterministic for a fixed seed"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -184,8 +200,14 @@ async fn live_source_reports_live_not_synthetic() {
     assert_eq!(v["banner"]["state"], "disconnected");
     assert_eq!(v["banner"]["upstream"], UPSTREAM);
     let label = v["banner_label"].as_str().unwrap();
-    assert!(label.starts_with("DISCONNECTED — http://127.0.0.1:8080"), "got {label}");
-    assert!(!label.contains("SYNTHETIC"), "live mode must never show SYNTHETIC");
+    assert!(
+        label.starts_with("DISCONNECTED — http://127.0.0.1:8080"),
+        "got {label}"
+    );
+    assert!(
+        !label.contains("SYNTHETIC"),
+        "live mode must never show SYNTHETIC"
+    );
 }
 
 #[tokio::test]

@@ -5,9 +5,7 @@ use serde::{Deserialize, Serialize};
 /// Privacy class of a field observation (ADR-260 §10). Ordered P0 (rawest,
 /// most sensitive) through P5 (identity-linked). The `Ord` derive orders by
 /// declaration so `P0 < P1 < ... < P5`; "≤ P2" policy checks rely on this.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum PrivacyClass {
     /// Raw waveform / raw sensor frame (raw CSI, raw radar cube).

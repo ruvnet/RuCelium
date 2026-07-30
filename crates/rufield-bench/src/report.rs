@@ -53,15 +53,27 @@ impl BenchReport {
     #[must_use]
     pub fn to_table(&self) -> String {
         let mut s = String::new();
-        s.push_str("================ RuField MFS v0.1 — Deterministic Benchmark Report ================\n");
+        s.push_str(
+            "================ RuField MFS v0.1 — Deterministic Benchmark Report ================\n",
+        );
         s.push_str(&format!(
             "spec={}  seed={}  events={}  modalities={}  distinct_inferences={}\n",
-            self.spec_version, self.seed, self.events_total, self.modalities, self.distinct_inferences
+            self.spec_version,
+            self.seed,
+            self.events_total,
+            self.modalities,
+            self.distinct_inferences
         ));
-        s.push_str("ALL METRICS ARE *SYNTHETIC* — scored vs the simulator's own ground-truth labels.\n");
-        s.push_str("They demonstrate the pipeline scores correctly against known truth; they are\n");
+        s.push_str(
+            "ALL METRICS ARE *SYNTHETIC* — scored vs the simulator's own ground-truth labels.\n",
+        );
+        s.push_str(
+            "They demonstrate the pipeline scores correctly against known truth; they are\n",
+        );
         s.push_str("NOT field-validated accuracy. No hardware is involved in v0.1.\n");
-        s.push_str("-----------------------------------------------------------------------------------\n");
+        s.push_str(
+            "-----------------------------------------------------------------------------------\n",
+        );
         s.push_str(&format!(
             "{:<20} {:>8} {:>10} {:>10} {:>8}\n",
             "TASK (SYNTHETIC)", "METRIC", "VALUE", "TARGET", "MEETS"
@@ -76,7 +88,9 @@ impl BenchReport {
                 if t.meets_target { "yes" } else { "NO" }
             ));
         }
-        s.push_str("-----------------------------------------------------------------------------------\n");
+        s.push_str(
+            "-----------------------------------------------------------------------------------\n",
+        );
         s.push_str(&format!(
             "p50 latency:          {:.4} ms\n",
             self.p50_latency_ms
@@ -84,7 +98,11 @@ impl BenchReport {
         s.push_str(&format!(
             "p95 latency:          {:.4} ms   (target < 100 ms: {})\n",
             self.p95_latency_ms,
-            if self.p95_latency_ms < 100.0 { "PASS" } else { "FAIL" }
+            if self.p95_latency_ms < 100.0 {
+                "PASS"
+            } else {
+                "FAIL"
+            }
         ));
         s.push_str(&format!(
             "provenance coverage:  {:.1} %      (target 100%: {})\n",
@@ -98,9 +116,15 @@ impl BenchReport {
         s.push_str(&format!(
             "privacy violations:   {}          (target 0: {})\n",
             self.privacy_violations,
-            if self.privacy_violations == 0 { "PASS" } else { "FAIL" }
+            if self.privacy_violations == 0 {
+                "PASS"
+            } else {
+                "FAIL"
+            }
         ));
-        s.push_str("===================================================================================\n");
+        s.push_str(
+            "===================================================================================\n",
+        );
         s
     }
 

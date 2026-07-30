@@ -7,9 +7,7 @@
 
 use crate::graph::{EdgeKind, FusionGraph, NodeKind};
 use crate::rules::{Method, Rule, RuleSet};
-use rufield_core::{
-    FieldEvent, FieldInference, FusionEngine, InferenceQuery, PrivacyClass,
-};
+use rufield_core::{FieldEvent, FieldInference, FusionEngine, InferenceQuery, PrivacyClass};
 use rufield_provenance::is_fusable;
 use std::collections::VecDeque;
 
@@ -30,7 +28,10 @@ impl std::fmt::Display for FusionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             FusionError::NotFusable(id) => {
-                write!(f, "event {id} is not fusable (no verified receipt and not synthetic)")
+                write!(
+                    f,
+                    "event {id} is not fusable (no verified receipt and not synthetic)"
+                )
             }
         }
     }
@@ -115,14 +116,9 @@ impl RuFieldFusion {
         let mut supporting = Vec::new();
         let mut contradicting = Vec::new();
         let mut prod_neg = 1.0f32; // ∏ (1 - p_i)
-        // Use the most recent item per modality.
+                                   // Use the most recent item per modality.
         for modality in &rule.inputs {
-            if let Some(it) = self
-                .window
-                .iter()
-                .rev()
-                .find(|it| &it.modality == modality)
-            {
+            if let Some(it) = self.window.iter().rev().find(|it| &it.modality == modality) {
                 let p = self.feat(it, &rule.feature);
                 prod_neg *= 1.0 - p;
                 if p >= rule.threshold {
@@ -228,10 +224,14 @@ impl FusionEngine for RuFieldFusion {
         };
 
         // Record provenance in the graph.
-        self.graph.add_node(&event.sensor.device_id, NodeKind::Sensor);
-        self.graph.add_node(&event.event_id, NodeKind::Event);
         self.graph
-            .add_edge(&event.event_id, &event.sensor.device_id, EdgeKind::ObservedBy);
+            .add_node(&event.sensor.device_id, NodeKind::Sensor);
+        self.graph.add_node(&event.event_id, NodeKind::Event);
+        self.graph.add_edge(
+            &event.event_id,
+            &event.sensor.device_id,
+            EdgeKind::ObservedBy,
+        );
 
         self.last_ts_ns = event.timestamp_ns;
         self.window.push_back(item);
@@ -282,7 +282,10 @@ mod tests {
 
     #[test]
     fn rejects_non_fusable_event() {
-        let cfg = SimConfig { seed: 1, ..SimConfig::default() };
+        let cfg = SimConfig {
+            seed: 1,
+            ..SimConfig::default()
+        };
         let mut evs = run_demo(&cfg);
         // Break fusability: clear synthetic flag + signature.
         let mut ev = evs.remove(0).event;
@@ -296,7 +299,10 @@ mod tests {
 
     #[test]
     fn produces_at_least_five_distinct_inferences_over_demo() {
-        let cfg = SimConfig { seed: 7, ..SimConfig::default() };
+        let cfg = SimConfig {
+            seed: 7,
+            ..SimConfig::default()
+        };
         let evs = run_demo(&cfg);
         let mut engine = RuFieldFusion::new();
         let mut seen = std::collections::BTreeSet::new();
@@ -316,7 +322,10 @@ mod tests {
 
     #[test]
     fn inference_is_deterministic() {
-        let cfg = SimConfig { seed: 5, ..SimConfig::default() };
+        let cfg = SimConfig {
+            seed: 5,
+            ..SimConfig::default()
+        };
         let run = |c: &SimConfig| {
             let mut e = RuFieldFusion::new();
             let mut labels = Vec::new();

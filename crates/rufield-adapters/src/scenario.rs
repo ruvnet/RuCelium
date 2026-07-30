@@ -52,7 +52,12 @@ impl Phase {
             // A sleeping person is still breathing — the band is physically
             // present during sleep, so breathing is ground-truth here too.
             Phase::Sleep => &["person_present", "sleeping", "breathing"],
-            Phase::Scratch => &["person_present", "sleeping", "breathing", "nocturnal_scratch"],
+            Phase::Scratch => &[
+                "person_present",
+                "sleeping",
+                "breathing",
+                "nocturnal_scratch",
+            ],
             Phase::BedExit => &["person_present", "bed_exit"],
             Phase::Leave => &["person_present", "room_transition"],
         }
@@ -73,15 +78,42 @@ pub struct PhaseSpan {
 #[must_use]
 pub fn demo_timeline() -> Vec<PhaseSpan> {
     vec![
-        PhaseSpan { phase: Phase::EmptyBefore, ticks: 8 },
-        PhaseSpan { phase: Phase::Enter, ticks: 6 },
-        PhaseSpan { phase: Phase::Sit, ticks: 6 },
-        PhaseSpan { phase: Phase::Breathing, ticks: 12 },
-        PhaseSpan { phase: Phase::Sleep, ticks: 14 },
-        PhaseSpan { phase: Phase::Scratch, ticks: 6 },
-        PhaseSpan { phase: Phase::BedExit, ticks: 6 },
-        PhaseSpan { phase: Phase::Leave, ticks: 6 },
-        PhaseSpan { phase: Phase::EmptyAfter, ticks: 8 },
+        PhaseSpan {
+            phase: Phase::EmptyBefore,
+            ticks: 8,
+        },
+        PhaseSpan {
+            phase: Phase::Enter,
+            ticks: 6,
+        },
+        PhaseSpan {
+            phase: Phase::Sit,
+            ticks: 6,
+        },
+        PhaseSpan {
+            phase: Phase::Breathing,
+            ticks: 12,
+        },
+        PhaseSpan {
+            phase: Phase::Sleep,
+            ticks: 14,
+        },
+        PhaseSpan {
+            phase: Phase::Scratch,
+            ticks: 6,
+        },
+        PhaseSpan {
+            phase: Phase::BedExit,
+            ticks: 6,
+        },
+        PhaseSpan {
+            phase: Phase::Leave,
+            ticks: 6,
+        },
+        PhaseSpan {
+            phase: Phase::EmptyAfter,
+            ticks: 8,
+        },
     ]
 }
 

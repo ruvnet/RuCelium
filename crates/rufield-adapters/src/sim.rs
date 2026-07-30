@@ -3,9 +3,9 @@
 //! sequence across 3 modalities (WiFi CSI, mmWave radar, thermal IR). Same seed
 //! ⇒ identical event stream.
 
+use crate::rng::SplitMix64;
 use crate::scenario::{demo_timeline, ticks, Phase};
 use crate::signals::{generate, SignalFeatures};
-use crate::rng::SplitMix64;
 use rufield_core::{
     AdapterCapabilities, Destination, FieldAdapter, FieldEvent, Modality, Observation,
     PrivacyClass, ProvenanceRef, SensorDescriptor,
@@ -118,14 +118,21 @@ impl SyntheticSim {
         obs.motion_vector = Some([features.motion_energy, 0.0, 0.0]);
         // Derived encoder features (P1) — what the fusion engine legitimately
         // reads. NOT the ground-truth labels.
-        obs.features.insert("motion_energy".into(), features.motion_energy);
-        obs.features.insert("breathing_band".into(), features.breathing_band);
-        obs.features.insert("posture_height".into(), features.posture_height);
+        obs.features
+            .insert("motion_energy".into(), features.motion_energy);
+        obs.features
+            .insert("breathing_band".into(), features.breathing_band);
+        obs.features
+            .insert("posture_height".into(), features.posture_height);
         obs.features.insert("transient".into(), features.transient);
         obs.features.insert("range_m".into(), features.range_m);
         obs.features.insert("presence".into(), features.presence);
         // Ground-truth labels — used ONLY by the benchmark to score against.
-        obs.labels = phase.truth_labels().iter().map(|s| (*s).to_string()).collect();
+        obs.labels = phase
+            .truth_labels()
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
 
         let event_id = format!(
             "{}-{}-{:05}",
@@ -134,11 +141,7 @@ impl SyntheticSim {
             tick_idx
         );
 
-        let raw_bytes: Vec<u8> = tensor
-            .values
-            .iter()
-            .flat_map(|v| v.to_le_bytes())
-            .collect();
+        let raw_bytes: Vec<u8> = tensor.values.iter().flat_map(|v| v.to_le_bytes()).collect();
         let provenance = ProvenanceRef {
             raw_hash: sha256_hex(&raw_bytes),
             firmware_hash: sha256_hex(b"rufield-synthetic-firmware-v0.1"),
@@ -273,8 +276,7 @@ mod tests {
     #[test]
     fn demo_emits_three_modalities() {
         let evs = run_demo(&cfg());
-        let mods: std::collections::HashSet<Modality> =
-            evs.iter().map(|e| e.modality).collect();
+        let mods: std::collections::HashSet<Modality> = evs.iter().map(|e| e.modality).collect();
         assert_eq!(mods.len(), 3);
         assert!(mods.contains(&Modality::WifiCsi));
         assert!(mods.contains(&Modality::MmwaveRadar));

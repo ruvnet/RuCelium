@@ -192,14 +192,19 @@ fn synthesize_values(
             let mut v = Vec::with_capacity(16);
             for i in 0..8 {
                 let carrier = (i as f32) / 8.0;
-                let amp = 0.5 + f.motion_energy * 0.5 * (carrier * 6.0).sin()
+                let amp = 0.5
+                    + f.motion_energy * 0.5 * (carrier * 6.0).sin()
                     + f.breathing_band * 0.3
                     + rng.noise(0.02);
                 let phase = f.range_m * 0.1 + carrier + rng.noise(0.02);
                 v.push(amp);
                 v.push(phase);
             }
-            (vec![FieldAxis::Frequency, FieldAxis::Amplitude], vec![8, 2], v)
+            (
+                vec![FieldAxis::Frequency, FieldAxis::Amplitude],
+                vec![8, 2],
+                v,
+            )
         }
         Modality::MmwaveRadar => {
             // range x velocity bins = [6, 4]
@@ -221,11 +226,19 @@ fn synthesize_values(
                 for _x in 0..4 {
                     // warmer where the body is; posture shifts the warm row.
                     let body_row = (3.0 * (1.0 - f.posture_height)) as usize;
-                    let warm = if y == body_row { f.motion_energy.max(0.3) } else { 0.0 };
+                    let warm = if y == body_row {
+                        f.motion_energy.max(0.3)
+                    } else {
+                        0.0
+                    };
                     v.push(20.0 + 8.0 * warm + rng.noise(0.1)); // °C-ish
                 }
             }
-            (vec![FieldAxis::Temperature, FieldAxis::Channel], vec![4, 4], v)
+            (
+                vec![FieldAxis::Temperature, FieldAxis::Channel],
+                vec![4, 4],
+                v,
+            )
         }
         _ => (vec![FieldAxis::Amplitude], vec![1], vec![0.0]),
     }
@@ -267,7 +280,11 @@ mod tests {
     #[test]
     fn tensor_shapes_valid_per_modality() {
         let mut r = SplitMix64::new(3);
-        for m in [Modality::WifiCsi, Modality::MmwaveRadar, Modality::InfraredThermal] {
+        for m in [
+            Modality::WifiCsi,
+            Modality::MmwaveRadar,
+            Modality::InfraredThermal,
+        ] {
             let (t, _, _) = generate(m, Phase::Sit, 1, &mut r);
             t.validate().unwrap();
         }

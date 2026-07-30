@@ -22,16 +22,14 @@ pub mod tensor;
 pub mod traits;
 
 pub use error::CoreError;
-pub use event::{
-    CalibrationReceipt, FieldEvent, Observation, ProvenanceRef, SensorDescriptor,
-};
+pub use event::{CalibrationReceipt, FieldEvent, Observation, ProvenanceRef, SensorDescriptor};
 pub use inference::{FieldEmbedding, FieldInference, InferenceQuery};
 pub use modality::{FieldAxis, Modality};
 pub use privacy::PrivacyClass;
 pub use tensor::{FieldTensor, SPEC_VERSION};
 pub use traits::{
-    AdapterCapabilities, Destination, FieldAdapter, FieldEncoder, FusionEngine,
-    PrivacyDecision, PrivacyGuard,
+    AdapterCapabilities, Destination, FieldAdapter, FieldEncoder, FusionEngine, PrivacyDecision,
+    PrivacyGuard,
 };
 
 #[cfg(test)]

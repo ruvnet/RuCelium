@@ -262,9 +262,7 @@ impl CsiReplayAdapter {
         // `.csi.jsonl` "tolerate trailing lines" contract. A parse failure on
         // any interior line is a hard error.
         let lines: Vec<&str> = text.lines().collect();
-        let last_nonempty = lines
-            .iter()
-            .rposition(|l| !l.trim().is_empty());
+        let last_nonempty = lines.iter().rposition(|l| !l.trim().is_empty());
 
         for (idx, raw) in lines.iter().enumerate() {
             let line_no = idx + 1;
@@ -407,8 +405,7 @@ impl CsiReplayAdapter {
             self.baseline
                 .as_ref()
                 .map(|b| {
-                    let mean_var =
-                        b.variance.iter().sum::<f32>() / b.variance.len().max(1) as f32;
+                    let mean_var = b.variance.iter().sum::<f32>() / b.variance.len().max(1) as f32;
                     mean_var.sqrt()
                 })
                 .unwrap_or(0.0),
@@ -665,7 +662,10 @@ mod tests {
         let text = format!("{valid}\n{{not json}}\n{valid}");
         match CsiReplayAdapter::from_jsonl(&text) {
             Err(CsiReplayError::Parse { line: 2, .. }) => {}
-            other => panic!("expected Parse on line 2, got {:?}", other.map(|_| "adapter")),
+            other => panic!(
+                "expected Parse on line 2, got {:?}",
+                other.map(|_| "adapter")
+            ),
         }
     }
 
@@ -676,7 +676,11 @@ mod tests {
         let truncated = r#"{"timestamp":1.0,"subcarriers":[0.0,3.0,4.1"#;
         let text = format!("{}\n{truncated}", SMALL.trim());
         let adapter = CsiReplayAdapter::from_jsonl(&text).unwrap();
-        assert_eq!(adapter.frame_count(), 3, "3 complete frames, trailing partial dropped");
+        assert_eq!(
+            adapter.frame_count(),
+            3,
+            "3 complete frames, trailing partial dropped"
+        );
     }
 
     #[test]

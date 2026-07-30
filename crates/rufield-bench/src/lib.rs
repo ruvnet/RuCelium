@@ -41,12 +41,14 @@ mod acceptance {
     #[test]
     fn section31_acceptance() {
         let seed = 2026;
-        let cfg = SimConfig { seed, ..SimConfig::default() };
+        let cfg = SimConfig {
+            seed,
+            ..SimConfig::default()
+        };
         let events = run_demo(&cfg);
 
         // (1) Three modalities stream into one event graph.
-        let modalities: std::collections::BTreeSet<_> =
-            events.iter().map(|e| e.modality).collect();
+        let modalities: std::collections::BTreeSet<_> = events.iter().map(|e| e.modality).collect();
         assert_eq!(modalities.len(), 3, "expected 3 modalities");
 
         // (2) Every event has a privacy class; (3) every event has a verifiable

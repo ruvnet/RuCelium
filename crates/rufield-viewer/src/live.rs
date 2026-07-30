@@ -221,8 +221,14 @@ mod tests {
 
         let live = frame_from_events(0, &events);
         // Event 0: not synthetic + broken signature ⇒ unverified, not fused.
-        assert!(!live.frame.events[0].receipt.verified, "tampered ⇒ ✗ verified");
-        assert!(!live.frame.events[0].receipt.fusable, "tampered ⇒ not fusable");
+        assert!(
+            !live.frame.events[0].receipt.verified,
+            "tampered ⇒ ✗ verified"
+        );
+        assert!(
+            !live.frame.events[0].receipt.fusable,
+            "tampered ⇒ not fusable"
+        );
         assert_eq!(live.unverified_count, 1, "one event flagged unverified");
 
         // It is still SURFACED in the event log (so forgery is visible)...

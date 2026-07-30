@@ -29,11 +29,29 @@ enum Kind {
 
 /// `(task, truth_label, produced_label, target_f1, kind)`.
 const SCORED_TASKS: &[(&str, &str, &str, f32, Kind)] = &[
-    ("presence", "person_present", "person_present", 0.90, Kind::State),
+    (
+        "presence",
+        "person_present",
+        "person_present",
+        0.90,
+        Kind::State,
+    ),
     ("breathing", "breathing", "breathing", 0.80, Kind::State),
-    ("nocturnal_scratch", "nocturnal_scratch", "nocturnal_scratch", 0.75, Kind::State),
+    (
+        "nocturnal_scratch",
+        "nocturnal_scratch",
+        "nocturnal_scratch",
+        0.75,
+        Kind::State,
+    ),
     ("bed_exit", "bed_exit", "bed_exit", 0.90, Kind::Event),
-    ("room_transition", "room_transition", "room_transition", 0.85, Kind::Event),
+    (
+        "room_transition",
+        "room_transition",
+        "room_transition",
+        0.85,
+        Kind::Event,
+    ),
 ];
 
 /// Tolerance (in ticks) for matching a detected event to a truth segment.
@@ -130,8 +148,10 @@ pub fn run(seed: u64) -> BenchReport {
     let mut distinct_inferences: BTreeSet<String> = BTreeSet::new();
 
     // Per-task per-tick predicted/truth series.
-    let mut series: BTreeMap<&str, (Vec<bool>, Vec<bool>)> =
-        SCORED_TASKS.iter().map(|t| (t.0, (Vec::new(), Vec::new()))).collect();
+    let mut series: BTreeMap<&str, (Vec<bool>, Vec<bool>)> = SCORED_TASKS
+        .iter()
+        .map(|t| (t.0, (Vec::new(), Vec::new())))
+        .collect();
 
     let ticks = group_by_tick(&events);
 
@@ -158,8 +178,7 @@ pub fn run(seed: u64) -> BenchReport {
         }
 
         let produced = engine.infer(&InferenceQuery::all()).unwrap_or_default();
-        let produced_labels: BTreeSet<String> =
-            produced.iter().map(|i| i.label.clone()).collect();
+        let produced_labels: BTreeSet<String> = produced.iter().map(|i| i.label.clone()).collect();
         for l in &produced_labels {
             distinct_inferences.insert(l.clone());
         }

@@ -47,16 +47,14 @@ async fn main() {
     let source_sel = arg_value(&args, "--source")
         .or_else(|| std::env::var("RUFIELD_VIEWER_SOURCE").ok())
         .unwrap_or_else(|| "synthetic".to_string());
-    let upstream = arg_value(&args, "--upstream")
-        .or_else(|| std::env::var("RUFIELD_VIEWER_UPSTREAM").ok());
+    let upstream =
+        arg_value(&args, "--upstream").or_else(|| std::env::var("RUFIELD_VIEWER_UPSTREAM").ok());
 
     let source = match source_sel.as_str() {
         "live" => match upstream {
             Some(u) if !u.is_empty() => SourceMode::Live { upstream: u },
             _ => {
-                eprintln!(
-                    "--source live requires --upstream <URL> (or RUFIELD_VIEWER_UPSTREAM)"
-                );
+                eprintln!("--source live requires --upstream <URL> (or RUFIELD_VIEWER_UPSTREAM)");
                 std::process::exit(2);
             }
         },
@@ -67,7 +65,13 @@ async fn main() {
         }
     };
 
-    let config = ViewerConfig { seed, tick_ms, loop_stream, source: source.clone(), poll_ms };
+    let config = ViewerConfig {
+        seed,
+        tick_ms,
+        loop_stream,
+        source: source.clone(),
+        poll_ms,
+    };
     let router = app(config);
 
     let addr = format!("127.0.0.1:{port}");
@@ -87,7 +91,9 @@ async fn main() {
         SourceMode::Live { upstream } => {
             println!("RuField MFS viewer (LIVE — ingesting {upstream}, ADR-262 P3)");
             println!("  upstream={upstream}  poll_ms={poll_ms}");
-            println!("  receipts verified on ingest; unreachable ⇒ DISCONNECTED (no synthetic fallback)");
+            println!(
+                "  receipts verified on ingest; unreachable ⇒ DISCONNECTED (no synthetic fallback)"
+            );
         }
     }
     println!("  dashboard:  http://{addr}/");

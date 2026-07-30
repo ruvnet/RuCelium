@@ -107,9 +107,7 @@ impl BannerState {
     #[must_use]
     pub fn label(&self) -> String {
         match self {
-            BannerState::Synthetic => {
-                "SYNTHETIC — simulated sensors, no hardware".to_string()
-            }
+            BannerState::Synthetic => "SYNTHETIC — simulated sensors, no hardware".to_string(),
             BannerState::Live { upstream } => format!("LIVE — {upstream}"),
             BannerState::Disconnected { upstream } => {
                 format!("DISCONNECTED — {upstream} unreachable")
@@ -152,9 +150,13 @@ impl LiveState {
     #[must_use]
     pub fn banner(&self) -> BannerState {
         if self.is_connected() {
-            BannerState::Live { upstream: self.upstream.clone() }
+            BannerState::Live {
+                upstream: self.upstream.clone(),
+            }
         } else {
-            BannerState::Disconnected { upstream: self.upstream.clone() }
+            BannerState::Disconnected {
+                upstream: self.upstream.clone(),
+            }
         }
     }
 }
@@ -168,7 +170,9 @@ pub fn banner_for(mode: &SourceMode, live: Option<&LiveState>) -> BannerState {
         SourceMode::Synthetic => BannerState::Synthetic,
         SourceMode::Live { upstream } => match live {
             Some(state) => state.banner(),
-            None => BannerState::Disconnected { upstream: upstream.clone() },
+            None => BannerState::Disconnected {
+                upstream: upstream.clone(),
+            },
         },
     }
 }
@@ -181,10 +185,7 @@ pub fn banner_for(mode: &SourceMode, live: Option<&LiveState>) -> BannerState {
 /// `state` so the banner can show LIVE vs DISCONNECTED honestly.
 ///
 /// Returns the broadcast receiver factory (via the returned `Sender`).
-pub fn spawn_ingest(
-    state: Arc<LiveState>,
-    poll_ms: u64,
-) -> broadcast::Sender<LiveFrame> {
+pub fn spawn_ingest(state: Arc<LiveState>, poll_ms: u64) -> broadcast::Sender<LiveFrame> {
     let (tx, _rx) = broadcast::channel::<LiveFrame>(256);
     let tx_task = tx.clone();
     tokio::spawn(async move {
@@ -195,11 +196,7 @@ pub fn spawn_ingest(
 
 /// The ingest loop: prefer `/ws/field` SSE, fall back to `/api/field` polling,
 /// retrying forever with a short backoff and keeping `state.connected` honest.
-async fn ingest_loop(
-    state: Arc<LiveState>,
-    poll_ms: u64,
-    tx: broadcast::Sender<LiveFrame>,
-) {
+async fn ingest_loop(state: Arc<LiveState>, poll_ms: u64, tx: broadcast::Sender<LiveFrame>) {
     let client = match reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
@@ -339,11 +336,15 @@ mod tests {
 
     #[test]
     fn live_disconnected_before_ingest_connects() {
-        let mode = SourceMode::Live { upstream: "http://127.0.0.1:8080".into() };
+        let mode = SourceMode::Live {
+            upstream: "http://127.0.0.1:8080".into(),
+        };
         // No live state yet ⇒ honest DISCONNECTED, NOT synthetic, NOT live.
         let b = banner_for(&mode, None);
         assert!(matches!(b, BannerState::Disconnected { .. }));
-        assert!(b.label().starts_with("DISCONNECTED — http://127.0.0.1:8080"));
+        assert!(b
+            .label()
+            .starts_with("DISCONNECTED — http://127.0.0.1:8080"));
         assert_ne!(b, BannerState::Synthetic);
     }
 
@@ -366,7 +367,9 @@ mod tests {
     fn source_mode_accessors() {
         let s = SourceMode::Synthetic;
         assert!(s.is_synthetic() && !s.is_live() && s.upstream().is_none());
-        let l = SourceMode::Live { upstream: "http://x".into() };
+        let l = SourceMode::Live {
+            upstream: "http://x".into(),
+        };
         assert!(l.is_live() && !l.is_synthetic());
         assert_eq!(l.upstream(), Some("http://x"));
         assert_eq!(l.code(), "live");
@@ -374,7 +377,10 @@ mod tests {
 
     #[test]
     fn sse_data_parsing() {
-        assert_eq!(parse_sse_data("event: field\ndata: {\"a\":1}"), Some("{\"a\":1}".to_string()));
+        assert_eq!(
+            parse_sse_data("event: field\ndata: {\"a\":1}"),
+            Some("{\"a\":1}".to_string())
+        );
         assert_eq!(
             parse_sse_data("data: line1\ndata: line2"),
             Some("line1\nline2".to_string())

@@ -177,7 +177,10 @@ pub struct RunData {
 pub fn build_run(seed: u64) -> RunData {
     use rufield_adapters::{run_demo, SimConfig};
 
-    let cfg = SimConfig { seed, ..SimConfig::default() };
+    let cfg = SimConfig {
+        seed,
+        ..SimConfig::default()
+    };
     let sim_events = run_demo(&cfg);
 
     // Group by tick (shared timestamp), preserving first-seen order.
@@ -214,8 +217,12 @@ pub fn build_run(seed: u64) -> RunData {
             }
             // Privacy guard check (mirrors the benchmark): an event above the
             // P2 default ceiling denied for network transmission is a violation.
-            let decision =
-                guard.authorize(ev.observation.privacy_class, Destination::Network, false, false);
+            let decision = guard.authorize(
+                ev.observation.privacy_class,
+                Destination::Network,
+                false,
+                false,
+            );
             if matches!(decision, PrivacyDecision::Deny(_))
                 && ev.observation.privacy_class > PrivacyClass::P2
             {

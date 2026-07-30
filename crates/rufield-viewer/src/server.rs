@@ -105,7 +105,11 @@ pub fn app(config: ViewerConfig) -> Router {
             (Some(state), Some(tx))
         }
     };
-    let state = Arc::new(AppState { config, live, live_tx });
+    let state = Arc::new(AppState {
+        config,
+        live,
+        live_tx,
+    });
     Router::new()
         .route("/", get(index))
         .route("/app.js", get(app_js))
@@ -124,7 +128,11 @@ pub fn app_no_ingest(config: ViewerConfig) -> Router {
         SourceMode::Synthetic => None,
         SourceMode::Live { upstream } => Some(Arc::new(LiveState::new(upstream.clone()))),
     };
-    let state = Arc::new(AppState { config, live, live_tx: None });
+    let state = Arc::new(AppState {
+        config,
+        live,
+        live_tx: None,
+    });
     Router::new()
         .route("/", get(index))
         .route("/app.js", get(app_js))
@@ -140,7 +148,10 @@ async fn index() -> Html<&'static str> {
 }
 
 async fn app_js() -> impl IntoResponse {
-    ([(axum::http::header::CONTENT_TYPE, "application/javascript")], APP_JS)
+    (
+        [(axum::http::header::CONTENT_TYPE, "application/javascript")],
+        APP_JS,
+    )
 }
 
 async fn health(State(st): State<Arc<AppState>>) -> impl IntoResponse {
@@ -259,8 +270,9 @@ fn live_event_stream(
         "banner_label": banner.label(),
         "spec_version": rufield_core::SPEC_VERSION,
     });
-    let meta_stream =
-        tokio_stream::iter(vec![Ok(Event::default().event("meta").data(meta.to_string()))]);
+    let meta_stream = tokio_stream::iter(vec![Ok(Event::default()
+        .event("meta")
+        .data(meta.to_string()))]);
 
     let frames = BroadcastStream::new(tx.subscribe()).filter_map(|res| match res {
         Ok(frame) => {
@@ -301,14 +313,20 @@ fn render_payloads(run: &RunData) -> Vec<Payload> {
         "provenance_coverage_pct": run.provenance_coverage_pct,
         "total_frames": run.frames.len(),
     });
-    out.push(Payload { name: "meta", data: meta.to_string() });
+    out.push(Payload {
+        name: "meta",
+        data: meta.to_string(),
+    });
     for f in &run.frames {
         out.push(Payload {
             name: "frame",
             data: serde_json::to_string(f).unwrap_or_default(),
         });
     }
-    out.push(Payload { name: "done", data: "{}".to_string() });
+    out.push(Payload {
+        name: "done",
+        data: "{}".to_string(),
+    });
     out
 }
 
@@ -318,7 +336,11 @@ fn payload_stream(
     payloads: Vec<Payload>,
     repeat: bool,
 ) -> impl tokio_stream::Stream<Item = Result<Event, Infallible>> {
-    PayloadStream { payloads, idx: 0, repeat }
+    PayloadStream {
+        payloads,
+        idx: 0,
+        repeat,
+    }
 }
 
 struct PayloadStream {
