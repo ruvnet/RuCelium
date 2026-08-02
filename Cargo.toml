@@ -73,3 +73,13 @@ uninlined_format_args = "allow"
 [profile.release]
 opt-level = 3
 lto = true
+
+# The RuMycelium biome benchmark signs/verifies ~10^5 ed25519 envelopes per
+# run; unoptimized curve arithmetic makes debug `cargo test` minutes-slow.
+# Optimize just the crypto dependencies in dev builds.
+[profile.dev.package.curve25519-dalek]
+opt-level = 3
+[profile.dev.package.ed25519-dalek]
+opt-level = 3
+[profile.dev.package.sha2]
+opt-level = 3

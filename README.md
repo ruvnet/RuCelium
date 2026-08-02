@@ -68,6 +68,52 @@ The full specification of record is
 | [`rufield-bench`](crates/rufield-bench) | Deterministic benchmark runner: F1 per task (SYNTHETIC), p95 latency, provenance coverage, privacy violations, and the ADR-260 §31 acceptance test. |
 | [`rufield-viewer`](crates/rufield-viewer) | Read-only web dashboard (Axum + vanilla JS, no build step): room state, event log with privacy badges, fusion graph, signed-receipt viewer. **Two sources** — `--source synthetic` (default) replays `SyntheticSim → RuFieldFusion`; `--source live --upstream <URL>` ingests **real** `FieldEvent`s from a RuField upstream (RuView `/ws/field` / `/api/field`, ADR-262 P3), verifying each receipt on ingest. Honest, mutually-exclusive `SYNTHETIC` / `LIVE` / `DISCONNECTED` banner. Not a device-management console. |
 
+## RuMycelium — federated environmental intelligence fabric
+
+[ADR-264](./docs/ADR-264-rumycelium-federated-fabric.md) extends the stack
+from room-scale field sensing to planetary environmental sensing — **not** as
+a flat global peer mesh (which fails on battery, bandwidth, routing,
+calibration, sovereignty, and compromised nodes) but as a **federated fabric**
+with four layers:
+
+```text
+Layer 4  Planetary federation   discovery + aggregates (OGC SensorThings), no ownership
+Layer 3  Biome regions          sovereign owners of data, models, actuators
+Layer 2  Rhizome gateways       Rust: verify, normalize, calibrate, fuse, buffer, govern
+Layer 1  Spore nodes            C: sense, fixed-point calibrate, sign, transmit
+```
+
+C stays confined to the sensor boundary (drivers, fixed-point DSP,
+serialization, transport — see
+[`rumycelium_env.h`](crates/rumycelium-abi/include/rumycelium_env.h));
+everything above it is safe Rust. RuView RF joins as a **contextual modality**
+— supporting evidence with a hard `Advisory` severity cap, never ground truth.
+
+| Crate | Description |
+|-------|-------------|
+| [`rumycelium-core`](crates/rumycelium-core) | Domain model: `EnvSample` (twelve mandatory attributes), `EnvFrame`, `CalibrationRecord` (Q16.16, lineage-chained), `EnvironmentalEvent`, `SensorModality` (10), `GeoPoint` with exact privacy coarsening, three-tier `DataClass` residency. |
+| [`rumycelium-abi`](crates/rumycelium-abi) | The versioned C ABI: packed 48-byte `rv_env_sample_v1`, bounds-checked allocation-free parse (no `unsafe`), deterministic CBOR (canonical heads enforced), COSE-inspired signed envelope, ed25519 device keys. |
+| [`rumycelium-ingest`](crates/rumycelium-ingest) | Gateway ingest: envelope decode → registry/revocation → signature verify → anti-replay window → normalized `EnvSample`. Forged packets can't burn sequence numbers. |
+| [`rumycelium-calibration`](crates/rumycelium-calibration) | Calibration lineage (anchor-rooted chains), affine application with stated uncertainty, EWMA drift detection, **quarantine — never silent correction**. |
+| [`rumycelium-worldgraph`](crates/rumycelium-worldgraph) | Environmental WorldGraph: typed sensor/ecosystem/region/anchor nodes, geospatial queries, evidence + contradiction edges, RuView `FieldEvent` RF-context bridge (weight-capped). |
+| [`rumycelium-policy`](crates/rumycelium-policy) | The ADR-264 §9 governed control path — proposal → policy → safety sim → authority → signed command → gateway validation → receipt — typed so **no stage can be skipped**. |
+| [`rumycelium-federation`](crates/rumycelium-federation) | Biome sovereignty: outage buffer with duplicate-free replay, signed regional summaries, device revocation, disclosure coarsening + delay, OGC SensorThings 1.1 projection. |
+| [`rumycelium-bench`](crates/rumycelium-bench) | Deterministic **SYNTHETIC** 64-node biome benchmark: 30 simulated days, 7-day offline partition, tamper/replay attack rejection, mid-run revocation, the ADR-264 §14 acceptance test. |
+
+Run the biome acceptance benchmark:
+
+```bash
+cargo run -p rumycelium-bench            # default seed
+cargo run -p rumycelium-bench -- 2026    # custom seed
+cargo run -p rumycelium-bench -- 2026 --json
+```
+
+> **Honesty note:** like the RuField numbers, the RuMycelium scorecard is
+> produced by a deterministic synthetic biome simulator and labelled
+> **SYNTHETIC** — it proves the fabric's mechanics (signatures, replay
+> windows, dedup, quarantine, revocation, projection) against known ground
+> truth. It is not a field deployment.
+
 ## Install / Quickstart
 
 This repository is a standalone Cargo workspace. The fastest way to see it
