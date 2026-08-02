@@ -36,9 +36,7 @@
 use rucelium_core::{
     EnvironmentalEvent, EventKind, EvidenceRef, GeoPoint, SensorModality, Severity, SPEC_VERSION,
 };
-use rucelium_examples::{
-    banner, line, synthetic_footer, Gateway, Node, Rng, EPOCH_NS, NS_PER_S,
-};
+use rucelium_examples::{banner, line, synthetic_footer, Gateway, Node, Rng, EPOCH_NS, NS_PER_S};
 use rucelium_federation::{verify_event, Biome, BiomeConfig};
 use rucelium_worldgraph::{EdgeKind, GraphNode, WorldGraph};
 
@@ -313,7 +311,8 @@ pub fn taxon_key(taxon: &str) -> String {
 #[allow(clippy::too_many_lines)]
 pub fn run() -> Report {
     let mut rng = Rng::new(0x00B3_D4A0_5EED_1234);
-    let station = GeoPoint::new(512_384_100, -32_117_400, 8_000).expect("valid station coordinates");
+    let station =
+        GeoPoint::new(512_384_100, -32_117_400, 8_000).expect("valid station coordinates");
 
     let mut acoustic = Node::new(
         0x00B3_0000_0000_0001,
@@ -584,7 +583,12 @@ pub fn run() -> Report {
         // Invasive detection. Molecular evidence only, so the cap applies.
         let invasive: Vec<&TaxonRead> = dna
             .as_ref()
-            .map(|d| d.non_human_taxa().into_iter().filter(|t| t.invasive).collect())
+            .map(|d| {
+                d.non_human_taxa()
+                    .into_iter()
+                    .filter(|t| t.invasive)
+                    .collect()
+            })
             .unwrap_or_default();
         let event = if invasive.is_empty() {
             None
@@ -697,10 +701,19 @@ fn main() {
 
     for ep in &r.episodes {
         println!("\n  {}\n", ep.label);
-        line("acoustic activity index", format!("{:.1}", ep.acoustic_index));
-        line("paired optical reference", format!("{:.1} lx", ep.illuminance_lx));
+        line(
+            "acoustic activity index",
+            format!("{:.1}", ep.acoustic_index),
+        );
+        line(
+            "paired optical reference",
+            format!("{:.1} lx", ep.illuminance_lx),
+        );
         line("naive anomaly z", format!("{:.2}", ep.naive_z));
-        line("circadian-adjusted anomaly z", format!("{:.2}", ep.adjusted_z));
+        line(
+            "circadian-adjusted anomaly z",
+            format!("{:.2}", ep.adjusted_z),
+        );
         line("naive detector would have sampled", ep.naive_would_trigger);
         line("sampler actually triggered", ep.sampler_triggered);
         println!("  -> {}", ep.trigger_note);
@@ -708,7 +721,10 @@ fn main() {
             line("acoustic classifier call", call);
         }
         if let Some(d) = &ep.dna {
-            line("sample id / total reads", format!("{} / {}", d.sample_id, d.total_reads));
+            line(
+                "sample id / total reads",
+                format!("{} / {}", d.sample_id, d.total_reads),
+            );
             for t in &d.taxa {
                 println!(
                     "      {:<32} {:>7} reads{}{}",
@@ -741,17 +757,17 @@ fn main() {
                 line("refused sample", sample_id);
                 println!("  !! {reason}");
                 println!("  !! nothing from this sample leaves: no taxa, no counts, no location.");
-                let internal = ep
-                    .dna
-                    .as_ref()
-                    .map_or(0, |d| d.non_human_taxa().len());
+                let internal = ep.dna.as_ref().map_or(0, |d| d.non_human_taxa().len());
                 line("non-human taxa still usable in-biome", internal);
             }
             None => line("disclosure", "n/a — no sample taken"),
         }
         if let Some(ev) = &ep.event {
             ev.validate().expect("event is structurally valid");
-            line("event severity (bio-only cap applied)", format!("{:?}", ev.severity));
+            line(
+                "event severity (bio-only cap applied)",
+                format!("{:?}", ev.severity),
+            );
             line("event confidence", format!("{:.2}", ev.confidence));
             println!("  -> {}", ev.message);
         }
@@ -759,7 +775,11 @@ fn main() {
             line("federated event verifies", verify_event(de));
             line(
                 "federated event location (coarsened)",
-                format!("{:.2}, {:.2}", de.geo.latitude_deg(), de.geo.longitude_deg()),
+                format!(
+                    "{:.2}, {:.2}",
+                    de.geo.latitude_deg(),
+                    de.geo.longitude_deg()
+                ),
             );
         }
     }
@@ -772,9 +792,18 @@ fn main() {
     println!("      (the WorldGraph is biome-resident DerivedFeature data: the blocked");
     println!("       sample's non-human taxa live here and NEVER federate; `Homo sapiens`");
     println!("       is never registered as a node at all.)");
-    line("contradictions recorded (never resolved)", r.contradiction_count);
-    line("max DNA evidence edge weight", format!("{:.2}", r.max_bio_edge_weight));
-    line("hard cap on that weight", format!("{BIO_MAX_EVIDENCE_WEIGHT:.2}"));
+    line(
+        "contradictions recorded (never resolved)",
+        r.contradiction_count,
+    );
+    line(
+        "max DNA evidence edge weight",
+        format!("{:.2}", r.max_bio_edge_weight),
+    );
+    line(
+        "hard cap on that weight",
+        format!("{BIO_MAX_EVIDENCE_WEIGHT:.2}"),
+    );
     line("envelopes cryptographically verified", r.verified_samples);
     line("WorldGraph JSON bytes (deterministic)", r.graph_json.len());
 
@@ -826,7 +855,10 @@ mod tests {
 
     #[test]
     fn invasive_detection_raises_an_event_capped_at_advisory() {
-        assert_eq!(bio_only_severity_cap(Severity::Critical), Severity::Advisory);
+        assert_eq!(
+            bio_only_severity_cap(Severity::Critical),
+            Severity::Advisory
+        );
         assert_eq!(bio_only_severity_cap(Severity::Warning), Severity::Advisory);
         let r = run();
         let ep = episode(&r, "pontoon anomaly");

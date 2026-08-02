@@ -33,7 +33,12 @@ repository = "https://github.com/ruvnet/rufield"
 [workspace.dependencies]
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+# `float_roundtrip` is LOAD-BEARING, not a nicety: every signature in this
+# workspace is computed over canonical JSON, and a peer verifies by
+# re-serializing what it parsed. Without exact float parsing, ~9% of realistic
+# sensor values come back one ULP off, so a genuine signed summary or event
+# fails verification after a wire round-trip. Do not remove.
+serde_json = { version = "1.0", features = ["float_roundtrip"] }
 toml = "0.8"
 
 # Provenance: hashing + signatures

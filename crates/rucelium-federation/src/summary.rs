@@ -626,4 +626,53 @@ mod tests {
             .to_string()
             .contains("boom"));
     }
+
+    /// A signed summary must still verify **after a JSON wire round-trip**.
+    ///
+    /// This is the real federation path: a biome signs canonical JSON, sends
+    /// it, and the peer verifies by re-serializing what it parsed. Exact
+    /// float parsing is therefore load-bearing — with `serde_json`'s default
+    /// (fast, non-exact) float parser, roughly 9% of realistic sensor values
+    /// come back one ULP off and a *genuine* summary fails verification. The
+    /// workspace pins `serde_json`'s `float_roundtrip` feature for exactly
+    /// this reason; this test is the guard that keeps it pinned.
+    #[test]
+    fn signed_summary_survives_a_json_wire_round_trip() {
+        let biome = biome_with_data();
+        // Values chosen to land on awkward binary fractions.
+        let mut summary = biome.summarize(0, u64::MAX);
+        summary.stats.insert(
+            "weather".into(),
+            ModalityStats {
+                count: 3,
+                mean: 23.470000000000002,
+                min: 0.1 + 0.2,
+                max: 1.0e-7 * 3.0,
+                mean_quality: 0.9700000000000001,
+            },
+        );
+        biome.sign_summary(&mut summary);
+        assert!(verify_summary(&summary), "verifies before the wire");
+
+        // Exactly what a peer does: serialize, transmit, parse, verify.
+        let wire = serde_json::to_string(&summary).expect("serialize");
+        let received: RegionalSummary = serde_json::from_str(&wire).expect("parse");
+        assert!(
+            verify_summary(&received),
+            "a genuine signed summary must verify after a JSON wire round-trip"
+        );
+
+        // And the floats must be bit-identical, not merely close.
+        for (k, before) in &summary.stats {
+            let after = &received.stats[k];
+            assert_eq!(before.mean.to_bits(), after.mean.to_bits(), "mean {k}");
+            assert_eq!(before.min.to_bits(), after.min.to_bits(), "min {k}");
+            assert_eq!(before.max.to_bits(), after.max.to_bits(), "max {k}");
+            assert_eq!(
+                before.mean_quality.to_bits(),
+                after.mean_quality.to_bits(),
+                "mean_quality {k}"
+            );
+        }
+    }
 }

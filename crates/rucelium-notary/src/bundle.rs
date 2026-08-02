@@ -300,7 +300,9 @@ impl EvidenceBundle {
 ///
 /// 1. recompute the leaf from the observation's canonical bytes and check it
 ///    against `leaf_hex` → [`NotaryError::LeafMismatch`];
-/// 2. verify the inclusion proof against the root's `root_hex`
+/// 2. verify the inclusion proof against the root's `root_hex`, requiring the
+///    proof's `leaf_count` to equal the root's signed `leaf_count` — otherwise
+///    a forger could re-declare the batch size to fit a path they invented
 ///    → [`NotaryError::ProofInvalid`];
 /// 3. check the root declares the verifier's algorithm
 ///    → [`NotaryError::AlgorithmMismatch`], and carries a signature
@@ -324,7 +326,9 @@ pub fn verify_bundle(
 
     let root_hash = hex_decode32(&bundle.root.root_hex)
         .ok_or_else(|| NotaryError::Encoding(format!("root_hex {:?}", bundle.root.root_hex)))?;
-    if !verify_inclusion(&recomputed, &bundle.proof, &root_hash) {
+    if bundle.proof.leaf_count != bundle.root.leaf_count
+        || !verify_inclusion(&recomputed, &bundle.proof, &root_hash)
+    {
         return Err(NotaryError::ProofInvalid);
     }
 
@@ -373,7 +377,11 @@ pub fn renotarize(
         .map(|r| leaf_hash(&canonical_root_bytes(r)))
         .collect();
     let tree = MerkleTree::build(leaves);
-    let window_start_ns = old_roots.iter().map(|r| r.window_start_ns).min().unwrap_or(0);
+    let window_start_ns = old_roots
+        .iter()
+        .map(|r| r.window_start_ns)
+        .min()
+        .unwrap_or(0);
     let window_end_ns = old_roots.iter().map(|r| r.window_end_ns).max().unwrap_or(0);
     let mut root = NotaryRoot {
         spec_version: SPEC_VERSION.to_string(),
@@ -685,6 +693,21 @@ mod tests {
             Err(NotaryError::ProofInvalid)
         );
 
+        // A proof that re-declares the batch size. `verify_inclusion` alone
+        // accepts a same-shape count (15 vs 16 at index 9); the bundle check
+        // rejects it because leaf_count is covered by the root signature.
+        let mut t = bundle.clone();
+        t.proof.leaf_count = 15;
+        assert!(verify_inclusion(
+            &hex_decode32(&t.leaf_hex).unwrap(),
+            &t.proof,
+            &hex_decode32(&t.root.root_hex).unwrap()
+        ));
+        assert_eq!(
+            verify_bundle(&t, &verifier, &trusted),
+            Err(NotaryError::ProofInvalid)
+        );
+
         // A leaf_hex that matches nothing.
         let mut t = bundle;
         t.leaf_hex = hex_encode(&[0u8; 32]);
@@ -766,7 +789,10 @@ mod tests {
 
         // An OLD root's inclusion in the NEW tree, proven and verified.
         let old_leaf = renotarized_leaf(&old_roots[1]);
-        let idx = renotarized.tree.index_of(&old_leaf).expect("old root is a leaf");
+        let idx = renotarized
+            .tree
+            .index_of(&old_leaf)
+            .expect("old root is a leaf");
         assert_eq!(idx, 1);
         let proof = renotarized.tree.prove(idx).unwrap();
         let new_root_hash = hex_decode32(&renotarized.root.root_hex).unwrap();
@@ -810,10 +836,32 @@ mod tests {
         assert_eq!(seen.len(), all.len());
         let as_err: &dyn std::error::Error = &NotaryError::ProofInvalid;
         assert!(!as_err.to_string().is_empty());
-        assert_eq!(
-            hybrid_algorithm().as_str(),
-            "hybrid-ed25519+ml-dsa-44"
-        );
+        assert_eq!(hybrid_algorithm().as_str(), "hybrid-ed25519+ml-dsa-44");
+    }
+
+    /// Archival stability regression. A leaf commits to the canonical JSON of
+    /// an observation, so an archived bundle must rehash to its own leaf after
+    /// being parsed back out of storage. `serde_json`'s default float parser
+    /// lands one ULP away from the value that printed it (e.g. the decimal
+    /// `23.470000000000002` parses back as `23.47`), which would silently break
+    /// every float-bearing bundle on the way out of the archive; this crate
+    /// therefore enables serde_json's `float_roundtrip` feature. If that
+    /// feature is ever dropped, this test fails rather than the year-2040
+    /// auditor.
+    #[test]
+    fn archived_observations_rehash_exactly_after_a_json_round_trip() {
+        for i in [0u32, 1, 7, 317, 4_095] {
+            let original = sample(i);
+            let leaf = lh(&serde_json::to_vec(&original).unwrap());
+            let text = serde_json::to_string(&original).unwrap();
+            let parsed: EnvSample = serde_json::from_str(&text).unwrap();
+            assert_eq!(parsed, original, "sample {i} lost precision");
+            assert_eq!(
+                lh(&serde_json::to_vec(&parsed).unwrap()),
+                leaf,
+                "sample {i} rehashed differently after archival"
+            );
+        }
     }
 
     #[test]

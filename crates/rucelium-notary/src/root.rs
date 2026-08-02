@@ -213,8 +213,8 @@ impl RootVerifier for Ed25519RootVerifier {
         let Ok(vk) = VerifyingKey::from_bytes(&pk_arr) else {
             return false;
         };
-        let Some(sig_arr) = hex_decode(sig_hex)
-            .and_then(|b| <[u8; ED25519_SIGNATURE_BYTES]>::try_from(b).ok())
+        let Some(sig_arr) =
+            hex_decode(sig_hex).and_then(|b| <[u8; ED25519_SIGNATURE_BYTES]>::try_from(b).ok())
         else {
             return false;
         };
@@ -281,6 +281,9 @@ pub fn verify_root(root: &NotaryRoot, verifier: &dyn RootVerifier) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A named single-field tamper applied to a signed root.
+    type Mutation = (&'static str, fn(&mut NotaryRoot));
 
     pub(crate) const SEED: &[u8; 32] = b"rucelium-notary-test-seed-32byte";
     pub(crate) const OTHER_SEED: &[u8; 32] = b"rucelium-notary-other-seed-32byt";
@@ -378,7 +381,7 @@ mod tests {
         };
         assert!(verify_root(&signed, &v));
 
-        let mutations: Vec<(&str, fn(&mut NotaryRoot))> = vec![
+        let mutations: Vec<Mutation> = vec![
             ("root_hex", |r| r.root_hex = crate::hex_encode(&[9u8; 32])),
             ("leaf_count", |r| r.leaf_count += 1),
             ("biome_id", |r| r.biome_id = "biome/elsewhere".into()),
@@ -398,7 +401,10 @@ mod tests {
         for (name, mutate) in mutations {
             let mut tampered = signed.clone();
             mutate(&mut tampered);
-            assert!(!verify_root(&tampered, &v), "{name} mutation still verified");
+            assert!(
+                !verify_root(&tampered, &v),
+                "{name} mutation still verified"
+            );
         }
 
         // The algorithm tag is signed too: flipping it fails on the algorithm

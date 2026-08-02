@@ -254,6 +254,14 @@ impl MerkleTree {
 /// The tree geometry is derived from `leaf_count` alone, never from the length
 /// of the supplied path, so an attacker cannot choose a shape that makes their
 /// path fit.
+///
+/// **Scope of `leaf_count` here:** this function checks that the declared count
+/// is *self-consistent* with the path, not that it is the true size of the
+/// notarized batch — a forger who supplies their own siblings can always name
+/// some count with the same path shape. Binding the count to reality is the
+/// signed root's job: [`crate::NotaryRoot::leaf_count`] is covered by the root
+/// signature, and [`crate::verify_bundle`] requires the proof's count to equal
+/// it.
 #[must_use]
 pub fn verify_inclusion(leaf: &[u8; 32], proof: &InclusionProof, root: &[u8; 32]) -> bool {
     if proof.leaf_count == 0 || proof.leaf_index >= proof.leaf_count {
@@ -452,16 +460,23 @@ mod tests {
         bad.leaf_index = 8;
         assert!(!verify_inclusion(&ls[3], &bad, &root));
 
-        // Wrong leaf_count changes the geometry.
-        let mut bad = p.clone();
-        bad.leaf_count = 9;
-        assert!(!verify_inclusion(&ls[3], &bad, &root));
-        let mut bad = p.clone();
-        bad.leaf_count = 7;
-        assert!(!verify_inclusion(&ls[3], &bad, &root));
-        let mut bad = p.clone();
-        bad.leaf_count = 0;
-        assert!(!verify_inclusion(&ls[3], &bad, &root));
+        // A leaf_count that changes the geometry is rejected: the path no
+        // longer has the right length for the claimed tree.
+        for count in [4usize, 9, 12, 0] {
+            let mut bad = p.clone();
+            bad.leaf_count = count;
+            assert!(
+                !verify_inclusion(&ls[3], &bad, &root),
+                "leaf_count {count} still verified"
+            );
+        }
+        // Documented limit: a count in the same shape class (7 vs 8 at index 3)
+        // recomputes the same path, so verify_inclusion alone cannot reject it.
+        // The count is bound to reality by the *signed* root, which is why
+        // verify_bundle cross-checks proof.leaf_count against root.leaf_count.
+        let mut same_shape = p;
+        same_shape.leaf_count = 7;
+        assert!(verify_inclusion(&ls[3], &same_shape, &root));
     }
 
     #[test]

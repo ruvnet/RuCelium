@@ -393,7 +393,11 @@ pub fn run() -> Report {
     let mut nodes: Vec<Node> = Vec::new();
     // Layout: [acoustic ×3][field ×3][temp ×3][humidity ×3].
     for (kind, base_id, modality) in [
-        ("acoustic", 0x00B4_0000_0000_0001_u64, SensorModality::Acoustic),
+        (
+            "acoustic",
+            0x00B4_0000_0000_0001_u64,
+            SensorModality::Acoustic,
+        ),
         ("field", 0x00B4_0000_0000_0101, SensorModality::Bioelectric),
         ("temp", 0x00B4_0000_0000_0201, SensorModality::Weather),
         ("humidity", 0x00B4_0000_0000_0301, SensorModality::Weather),
@@ -427,7 +431,8 @@ pub fn run() -> Report {
                 // Foraging is diurnal: the index peaks in the middle of the
                 // day. Aggregating over the whole day removes it.
                 let diurnal = [-9.0, 11.0, 7.0, -9.0][slot];
-                let av = h.base_acoustic + diurnal + acoustic_effect(h, day) + rng.noise(h.sd_acoustic);
+                let av =
+                    h.base_acoustic + diurnal + acoustic_effect(h, day) + rng.noise(h.sd_acoustic);
                 let env = nodes[i].emit(av, ns, 1);
                 let s = gw
                     .ingest(&env, ns + 1_000_000)
@@ -482,9 +487,8 @@ pub fn run() -> Report {
         .map(|i| {
             let win: Vec<&HiveDay> = days[..BASELINE_DAYS].iter().map(|r| &r[i]).collect();
             let len = win.len() as f64;
-            let mean = |f: fn(&HiveDay) -> f64, w: &[&HiveDay]| {
-                w.iter().map(|d| f(d)).sum::<f64>() / len
-            };
+            let mean =
+                |f: fn(&HiveDay) -> f64, w: &[&HiveDay]| w.iter().map(|d| f(d)).sum::<f64>() / len;
             let sd = |f: fn(&HiveDay) -> f64, w: &[&HiveDay], m: f64| {
                 (w.iter().map(|d| (f(d) - m).powi(2)).sum::<f64>() / (len - 1.0)).sqrt()
             };
@@ -653,7 +657,13 @@ fn main() {
     for b in &r.baselines {
         println!(
             "  {:<18} {:>10.1} {:>8.2} {:>10.1} {:>8.2} {:>9.2} {:>10.2}",
-            b.label, b.mean_acoustic, b.sd_acoustic, b.mean_field, b.sd_field, b.mean_temp, b.mean_gain_kg
+            b.label,
+            b.mean_acoustic,
+            b.sd_acoustic,
+            b.mean_field,
+            b.sd_field,
+            b.mean_temp,
+            b.mean_gain_kg
         );
     }
     println!("  -> three colonies, three different normals. No global threshold.");
@@ -683,21 +693,36 @@ fn main() {
             };
             println!(
                 "  {:<18} {:>9.2} {:>9.2} {:>9.2} {:>9.2} {:>9.2} {:>12}",
-                v.label, v.acoustic_z, v.field_z, v.temp_dev_c, v.acoustic_slope, v.gain_kg, verdict
+                v.label,
+                v.acoustic_z,
+                v.field_z,
+                v.temp_dev_c,
+                v.acoustic_slope,
+                v.gain_kg,
+                verdict
             );
         }
         let naive = a.hives.iter().filter(|v| v.naive_alarm).count();
         let thermal = a.hives.iter().filter(|v| v.thermally_explained).count();
         line("naive acoustic alarms", format!("{naive} of 3"));
-        line("thermally explained by the reference", format!("{thermal} of 3"));
+        line(
+            "thermally explained by the reference",
+            format!("{thermal} of 3"),
+        );
         line("colonies collapsing in this window", a.correlated_hives);
         line("evidence is a single colony (biology only)", a.bio_only);
-        line("severity before the biological cap", format!("{:?}", a.uncapped));
+        line(
+            "severity before the biological cap",
+            format!("{:?}", a.uncapped),
+        );
         line("severity emitted", format!("{:?}", a.severity));
         match &a.event {
             Some(ev) => {
                 ev.validate().expect("event is structurally valid");
-                line("event", format!("{:?} / conf {:.2}", ev.severity, ev.confidence));
+                line(
+                    "event",
+                    format!("{:?} / conf {:.2}", ev.severity, ev.confidence),
+                );
                 println!("  -> {}", ev.message);
             }
             None => line("event", "NONE"),
@@ -705,12 +730,21 @@ fn main() {
     }
 
     println!("\n  DERIVED SERIES AND RESIDENCY\n");
-    line("hive weight series data class", format!("{:?}", r.weight_series_class));
-    line("its residency", format!("{:?}", r.weight_series_class.residency()));
+    line(
+        "hive weight series data class",
+        format!("{:?}", r.weight_series_class),
+    );
+    line(
+        "its residency",
+        format!("{:?}", r.weight_series_class.residency()),
+    );
     for (b, w) in r.baselines.iter().zip(&r.final_weights) {
         line(&format!("final weight — {}", b.label), format!("{w:.2} kg"));
     }
-    line("max colony evidence edge weight cap", format!("{BIO_MAX_EVIDENCE_WEIGHT:.2}"));
+    line(
+        "max colony evidence edge weight cap",
+        format!("{BIO_MAX_EVIDENCE_WEIGHT:.2}"),
+    );
     line("envelopes cryptographically verified", r.verified_samples);
 
     print_not_validated();
@@ -733,7 +767,10 @@ mod tests {
             .collect();
         assert_eq!(fired, vec!["H1 orchard-east"]);
         let h1 = &r.swarm.hives[0];
-        assert!(h1.acoustic_slope >= SWARM_SLOPE, "acoustic must be climbing");
+        assert!(
+            h1.acoustic_slope >= SWARM_SLOPE,
+            "acoustic must be climbing"
+        );
         assert!(h1.gain_kg < r.baselines[0].mean_gain_kg * SWARM_GAIN_FRACTION);
         // No collapse anywhere, and the event is a capped Watch → Advisory.
         assert_eq!(r.swarm.correlated_hives, 0);
@@ -745,7 +782,10 @@ mod tests {
 
     #[test]
     fn a_single_hive_collapse_stays_advisory() {
-        assert_eq!(collapse_severity(1), (Severity::Warning, Severity::Advisory, true));
+        assert_eq!(
+            collapse_severity(1),
+            (Severity::Warning, Severity::Advisory, true)
+        );
         let r = run();
         let a = &r.solo;
         assert_eq!(a.correlated_hives, 1);

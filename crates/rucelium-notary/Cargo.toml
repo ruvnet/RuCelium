@@ -14,7 +14,12 @@ rucelium-core = { workspace = true }
 sha2 = { workspace = true }
 ed25519-dalek = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
+# `float_roundtrip` is load-bearing, not an optimization: without it serde_json
+# parses a decimal like `23.470000000000002` to a f64 one ULP away from the
+# value that printed it, so an archived evidence bundle would not rehash to its
+# own leaf after a JSON round trip. ADR-267's whole claim is that bytes stored
+# in 2026 still verify in 2040 — exact float round-tripping is a precondition.
+serde_json = { workspace = true, features = ["float_roundtrip"] }
 
 [lints]
 workspace = true
