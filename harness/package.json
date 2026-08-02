@@ -11,7 +11,7 @@
   "author": "rUv <ruv@ruv.net>",
   "type": "module",
   "bin": {
-    "rucelium": "./bin/rucelium.js"
+    "rucelium": "bin/rucelium.js"
   },
   "engines": {
     "node": ">=18"
