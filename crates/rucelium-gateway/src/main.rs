@@ -14,7 +14,7 @@ async fn main() {
                 "usage: rucelium-gateway [--biome-id <s>] [--udp <port>] [--http <port>] \
                  [--data-dir <path>] [--peer <url>]... [--simulate <n>] [--seed <u64>] \
                  [--sim-interval-ms <u64>] [--retention-check-secs <u64>] \
-                 [--federation-poll-ms <u64>]"
+                 [--federation-poll-ms <u64>] [--actuator <id>] [--fsync <bool>]"
             );
             std::process::exit(2);
         }
@@ -25,6 +25,8 @@ async fn main() {
     println!("  udp:        {}", config.udp_port);
     println!("  http:       {}", config.http_port);
     println!("  data dir:   {}", config.data_dir.display());
+    println!("  fsync:      {}", config.fsync);
+    println!("  actuator:   {}", config.actuator_id);
     println!("  simulate:   {} synthetic node(s)", config.simulate);
     if config.peers.is_empty() {
         println!("  peers:      none");

@@ -99,12 +99,15 @@ async fn provision(state: &GatewayState, n: u32, seed: u64) -> Vec<SimNode> {
     let expires = now.saturating_add(3650 * NS_PER_DAY);
     let mut inner = state.inner.lock().await;
 
-    // Anchor records: ids 1..=9 by modality code (skip 0 = WifiCsi).
+    // Anchor records: ids 1..=9 by modality code (skip 0 = WifiCsi). The
+    // store runs in STRICT mode, so every record is signed by the gateway's
+    // calibration authority before insertion — an unsigned "anchor_reference"
+    // root would be refused (ADR-264 §12 items 1–3).
     for m in SensorModality::ALL {
         if m == SensorModality::WifiCsi {
             continue;
         }
-        let _ = inner.calibration.insert(CalibrationRecord {
+        let _ = inner.insert_signed_calibration(CalibrationRecord {
             calibration_id: u32::from(m.code()),
             node_id: 0, // the reference anchor station
             modality: m,
@@ -135,7 +138,7 @@ async fn provision(state: &GatewayState, n: u32, seed: u64) -> Vec<SimNode> {
             format!("sha256:sim-fw-{i}"),
         );
         let calibration_id = 1000 + i as u32;
-        let _ = inner.calibration.insert(CalibrationRecord {
+        let _ = inner.insert_signed_calibration(CalibrationRecord {
             calibration_id,
             node_id,
             modality,

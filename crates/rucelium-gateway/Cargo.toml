@@ -21,6 +21,7 @@ rucelium-ingest = { workspace = true }
 rucelium-calibration = { workspace = true }
 rucelium-worldgraph = { workspace = true }
 rucelium-federation = { workspace = true }
+rucelium-policy = { workspace = true }
 rucelium-store = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
