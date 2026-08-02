@@ -45,6 +45,21 @@ pub enum CalibrationError {
     },
     /// The record applies to a different sensor modality than the sample's.
     WrongModality(u32),
+    /// The record carries no signature (or no signer public key) where a
+    /// cryptographically verified lineage requires one (§12 items 1–3).
+    MissingSignature(u32),
+    /// The record's signature (or its encoding) failed to verify over the
+    /// record's canonical bytes — the content was tampered with or the
+    /// signature is forged.
+    BadSignature(u32),
+    /// The record's signature verifies, but the signing key is not a
+    /// registered authority for the record's modality.
+    UntrustedSigner {
+        /// The record with the untrusted signer.
+        id: u32,
+        /// Hex-encoded public key that signed the record.
+        signer: String,
+    },
     /// A core data-model validation failure (record or sample invariants).
     Core(EnvError),
 }
@@ -86,6 +101,17 @@ impl fmt::Display for CalibrationError {
                     "calibration {id} does not apply to the sample's modality"
                 )
             }
+            CalibrationError::MissingSignature(id) => {
+                write!(f, "calibration {id} is unsigned (signature required)")
+            }
+            CalibrationError::BadSignature(id) => {
+                write!(f, "calibration {id} signature verification failed")
+            }
+            CalibrationError::UntrustedSigner { id, signer } => write!(
+                f,
+                "calibration {id} was signed by untrusted key {signer} \
+                 (not a registered authority for this modality)"
+            ),
             CalibrationError::Core(e) => write!(f, "core validation error: {e}"),
         }
     }
@@ -140,6 +166,15 @@ mod tests {
                 "node",
             ),
             (CalibrationError::WrongModality(8), "modality"),
+            (CalibrationError::MissingSignature(9), "unsigned"),
+            (CalibrationError::BadSignature(10), "verification failed"),
+            (
+                CalibrationError::UntrustedSigner {
+                    id: 11,
+                    signer: "aabb".into(),
+                },
+                "untrusted key aabb",
+            ),
             (
                 CalibrationError::Core(EnvError::MissingField("unit")),
                 "unit",

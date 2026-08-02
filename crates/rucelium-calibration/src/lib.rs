@@ -7,7 +7,11 @@
 //!
 //! 1. **Signed calibration lineage** — every [`rucelium_core::CalibrationRecord`]
 //!    chains via `parent_id` up to a reference-grade anchor; broken chains are
-//!    rejected ([`CalibrationStore::verify_lineage`], §12 items 1–3).
+//!    rejected ([`CalibrationStore::verify_lineage`], §12 items 1–3). In
+//!    strict mode ([`CalibrationStore::with_authorities`]) every record must
+//!    additionally carry an ed25519 signature from a registered
+//!    [`CalibrationAuthority`] trusted for the record's modality — a method
+//!    string alone can never declare an anchor.
 //! 2. **Measurement uncertainty on every observation** — applying a
 //!    calibration recentres and (only ever) widens the sample's uncertainty
 //!    interval to at least the record's stated half-width
@@ -25,11 +29,15 @@
 
 #![doc(html_root_url = "https://docs.rs/rucelium-calibration/0.1.0")]
 
+pub mod authority;
 pub mod calibrator;
 pub mod drift;
 pub mod error;
 pub mod store;
 
+pub use authority::{
+    sha256_hex, verify_record_signature, AuthorityRegistry, CalibrationAuthority, CalibrationSigner,
+};
 pub use calibrator::{CalibrationOutcome, Calibrator};
 pub use drift::{DriftConfig, DriftDetector, QuarantineState};
 pub use error::CalibrationError;

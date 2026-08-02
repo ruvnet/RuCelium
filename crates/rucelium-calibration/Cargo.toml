@@ -13,6 +13,8 @@ categories = ["science"]
 rucelium-core = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+ed25519-dalek = { workspace = true }
+sha2 = { workspace = true }
 
 [lints]
 workspace = true

@@ -923,9 +923,11 @@ dependencies = [
 name = "rucelium-calibration"
 version = "0.1.0"
 dependencies = [
+ "ed25519-dalek",
  "rucelium-core",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
