@@ -107,7 +107,7 @@ impl BiomeReport {
     pub fn to_table(&self) -> String {
         let mut s = String::new();
         s.push_str(
-            "============ RuCelium v0.1 — Deterministic Biome Benchmark (ADR-264 §14) ============\n",
+            "====== RuCelium v0.1 — Fabric Reference-Model Acceptance (ADR-264 §14, SYNTHETIC) ======\n",
         );
         s.push_str(&format!(
             "spec={}  seed={}  nodes={}  days={}  offline_days={}  emissions={}\n",
@@ -122,9 +122,15 @@ impl BiomeReport {
             "ALL NUMBERS ARE *SYNTHETIC* — a deterministic biome simulator, not a field pilot.\n",
         );
         s.push_str(
-            "They prove the fabric's mechanics (signatures, replay windows, dedup, quarantine,\n",
+            "This scores the fabric REFERENCE MODEL (in-memory library components: signatures,\n",
         );
-        s.push_str("revocation, projection) against known ground truth.\n");
+        s.push_str(
+            "replay windows, dedup, quarantine, revocation, projection) against known ground\n",
+        );
+        s.push_str(
+            "truth. It does NOT exercise the runtime path (store/transport/gateway daemon),\n",
+        );
+        s.push_str("which has its own end-to-end and restart-attack tests in rucelium-gateway.\n");
         s.push_str(
             "----------------------------------------------------------------------------------------\n",
         );

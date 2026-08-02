@@ -313,6 +313,10 @@ pub struct IngestStats {
     pub too_old: u64,
     /// Rejections: domain conversion/validation failed.
     pub domain: u64,
+    /// Stored envelopes successfully re-verified after restart/outage
+    /// restore ([`IngestPipeline::reverify_stored`]); counted separately
+    /// from `accepted` because they bypass the replay window by design.
+    pub restored: u64,
 }
 
 impl IngestStats {
@@ -343,6 +347,53 @@ fn hex_encode(bytes: &[u8]) -> String {
         s.push_str(&format!("{b:02x}"));
     }
     s
+}
+
+/// A cryptographically verified environmental sample — the ONLY type the
+/// biome layer accepts (`rucelium_federation::Biome::accept`).
+///
+/// This wrapper is the type-level fix for the "forgeable `verified` boolean"
+/// problem: it is deliberately **not** `Serialize`/`Deserialize` and has no
+/// public constructor, so it can only come out of [`IngestPipeline::ingest`]
+/// or [`IngestPipeline::reverify_stored`] — both of which perform the full
+/// registry + signature checks. A deserialized `EnvSample` with
+/// `provenance.verified = true` cannot impersonate one.
+///
+/// Serializing (storage, network) goes through [`Self::into_inner`] /
+/// [`Self::sample`] and **loses** the seal; restoring verification requires
+/// the original signed envelope bytes (`reverify_stored`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct VerifiedEnvSample(EnvSample);
+
+impl VerifiedEnvSample {
+    /// Read access to the verified sample.
+    #[must_use]
+    pub fn sample(&self) -> &EnvSample {
+        &self.0
+    }
+
+    /// Unwrap for storage/serialization. The seal is lost — a round-trip
+    /// through disk or the network must re-verify via
+    /// [`IngestPipeline::reverify_stored`].
+    #[must_use]
+    pub fn into_inner(self) -> EnvSample {
+        self.0
+    }
+
+    /// Apply a legitimate transformation (e.g. calibration) while keeping
+    /// the seal. The closure runs on a copy; the change is committed only if
+    /// the transformed sample still validates — so a buggy transformation
+    /// cannot corrupt a sealed sample.
+    pub fn modify<T>(
+        &mut self,
+        f: impl FnOnce(&mut EnvSample) -> T,
+    ) -> Result<T, rucelium_core::EnvError> {
+        let mut candidate = self.0.clone();
+        let out = f(&mut candidate);
+        candidate.validate()?;
+        self.0 = candidate;
+        Ok(out)
+    }
 }
 
 /// The rhizome-gateway ingest pipeline: parse → verify → replay-window →
@@ -416,36 +467,13 @@ impl IngestPipeline {
         &mut self,
         envelope_bytes: &[u8],
         received_ns: u64,
-    ) -> Result<EnvSample, RejectReason> {
-        // (1) Envelope decode.
-        let record = match SignedEnvRecordV1::decode(envelope_bytes) {
-            Ok(r) => r,
-            Err(e) => return Err(self.reject(RejectReason::BadEnvelope(e.to_string()))),
-        };
-
-        // (2) ABI payload parse + validation.
-        let wire = match RvEnvSampleV1::parse_validated(&record.payload) {
-            Ok(w) => w,
-            Err(e) => return Err(self.reject(RejectReason::BadPayload(e.to_string()))),
+    ) -> Result<VerifiedEnvSample, RejectReason> {
+        // (1)–(6): decode + full cryptographic verification.
+        let (record, wire, firmware_hash) = match self.verify_envelope(envelope_bytes) {
+            Ok(v) => v,
+            Err(e) => return Err(self.reject(e)),
         };
         let node_id = wire.node_id;
-
-        // (3) Registered? (4) Revoked?
-        let (registered_pubkey, firmware_hash) = match self.registry.get(node_id) {
-            None => return Err(self.reject(RejectReason::UnknownDevice(node_id))),
-            Some(d) if d.revoked => return Err(self.reject(RejectReason::RevokedDevice(node_id))),
-            Some(d) => (d.pubkey, d.firmware_hash.clone()),
-        };
-
-        // (5) The envelope must carry exactly the provisioned key.
-        if record.pubkey != registered_pubkey {
-            return Err(self.reject(RejectReason::KeyMismatch(node_id)));
-        }
-
-        // (6) Signature over the exact payload bytes.
-        if verify_record(&record).is_err() {
-            return Err(self.reject(RejectReason::BadSignature(node_id)));
-        }
 
         // (7) Anti-replay — only now, after every cryptographic check, may
         // the window advance. RV_ENV_FLAG_RETRANSMIT never bypasses dedup.
@@ -478,10 +506,89 @@ impl IngestPipeline {
         ) {
             Ok(sample) => {
                 self.stats.accepted += 1;
-                Ok(sample)
+                Ok(VerifiedEnvSample(sample))
             }
             Err(e) => Err(self.reject(RejectReason::Domain(e.to_string()))),
         }
+    }
+
+    /// Re-verify a **stored** signed envelope (e.g. drained from an outage
+    /// buffer or restored after a crash) without touching the anti-replay
+    /// window: its sequence was already consumed when it was first accepted,
+    /// so a second window check would wrongly report `Replay`. All
+    /// cryptographic checks — registry, revocation, key match, signature,
+    /// payload validation — run in full; duplicate suppression is the biome
+    /// dedup index's job on this path.
+    pub fn reverify_stored(
+        &mut self,
+        envelope_bytes: &[u8],
+        received_ns: u64,
+    ) -> Result<VerifiedEnvSample, RejectReason> {
+        let (record, wire, firmware_hash) = match self.verify_envelope(envelope_bytes) {
+            Ok(v) => v,
+            Err(e) => return Err(self.reject(e)),
+        };
+        match wire.to_env_sample(
+            received_ns,
+            &firmware_hash,
+            &hex_encode(&record.pubkey),
+            true,
+        ) {
+            Ok(sample) => {
+                self.stats.restored += 1;
+                Ok(VerifiedEnvSample(sample))
+            }
+            Err(e) => Err(self.reject(RejectReason::Domain(e.to_string()))),
+        }
+    }
+
+    /// Rebuild the anti-replay windows from a durable dedup index after a
+    /// process restart (ADR-265: the store's persistent `(node_id, sequence)`
+    /// index is the replay memory — without this call, a restarted gateway
+    /// would re-accept previously ingested signed packets).
+    ///
+    /// `keys` may arrive in any order; for each device the window is set to
+    /// the highest sequence seen with the in-window history bits populated.
+    pub fn prime_from_dedup(&mut self, keys: impl IntoIterator<Item = (u64, u32)>) {
+        let mut per_node: BTreeMap<u64, Vec<u32>> = BTreeMap::new();
+        for (node, seq) in keys {
+            per_node.entry(node).or_default().push(seq);
+        }
+        for (node, mut seqs) in per_node {
+            seqs.sort_unstable();
+            let window = self.windows.entry(node).or_default();
+            for seq in seqs {
+                // Errors here mean "already recorded" — harmless during
+                // priming.
+                let _ = window.check_and_update(seq);
+            }
+        }
+    }
+
+    /// Steps (1)–(6) of the ingest contract, shared by [`Self::ingest`] and
+    /// [`Self::reverify_stored`]: envelope decode, payload validation,
+    /// registry + revocation lookup, key match, and signature verification.
+    fn verify_envelope(
+        &self,
+        envelope_bytes: &[u8],
+    ) -> Result<(SignedEnvRecordV1, RvEnvSampleV1, String), RejectReason> {
+        let record = SignedEnvRecordV1::decode(envelope_bytes)
+            .map_err(|e| RejectReason::BadEnvelope(e.to_string()))?;
+        let wire = RvEnvSampleV1::parse_validated(&record.payload)
+            .map_err(|e| RejectReason::BadPayload(e.to_string()))?;
+        let node_id = wire.node_id;
+        let (registered_pubkey, firmware_hash) = match self.registry.get(node_id) {
+            None => return Err(RejectReason::UnknownDevice(node_id)),
+            Some(d) if d.revoked => return Err(RejectReason::RevokedDevice(node_id)),
+            Some(d) => (d.pubkey, d.firmware_hash.clone()),
+        };
+        if record.pubkey != registered_pubkey {
+            return Err(RejectReason::KeyMismatch(node_id));
+        }
+        if verify_record(&record).is_err() {
+            return Err(RejectReason::BadSignature(node_id));
+        }
+        Ok((record, wire, firmware_hash))
     }
 }
 
@@ -547,7 +654,8 @@ mod tests {
     #[test]
     fn happy_path_ingests_verified_sample_with_registry_firmware() {
         let mut p = pipeline();
-        let sample = p.ingest(&signed_envelope(NODE_A, 1, 0), RECV).unwrap();
+        let sealed = p.ingest(&signed_envelope(NODE_A, 1, 0), RECV).unwrap();
+        let sample = sealed.sample();
         sample.validate().unwrap();
         assert_eq!(sample.node_id, NODE_A);
         assert_eq!(sample.sequence, 1);
@@ -664,7 +772,7 @@ mod tests {
         );
         // The second registered device is unaffected.
         let s = p.ingest(&signed_envelope(NODE_B, 1, 0), RECV).unwrap();
-        assert_eq!(s.provenance.firmware_hash, FW_B);
+        assert_eq!(s.sample().provenance.firmware_hash, FW_B);
         assert_eq!(p.stats().accepted, 2);
         assert_eq!(p.stats().revoked_device, 1);
     }

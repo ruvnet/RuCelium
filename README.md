@@ -98,7 +98,7 @@ everything above it is safe Rust. RuView RF joins as a **contextual modality**
 | [`rucelium-worldgraph`](crates/rucelium-worldgraph) | Environmental WorldGraph: typed sensor/ecosystem/region/anchor nodes, geospatial queries, evidence + contradiction edges, RuView `FieldEvent` RF-context bridge (weight-capped). |
 | [`rucelium-policy`](crates/rucelium-policy) | The ADR-264 §9 governed control path — proposal → policy → safety sim → authority → signed command → gateway validation → receipt — typed so **no stage can be skipped**. |
 | [`rucelium-federation`](crates/rucelium-federation) | Biome sovereignty: outage buffer with duplicate-free replay, signed regional summaries, device revocation, disclosure coarsening + delay, OGC SensorThings 1.1 projection. |
-| [`rucelium-bench`](crates/rucelium-bench) | Deterministic **SYNTHETIC** 64-node biome benchmark: 30 simulated days, 7-day offline partition, tamper/replay attack rejection, mid-run revocation, the ADR-264 §14 acceptance test. |
+| [`rucelium-bench`](crates/rucelium-bench) | Deterministic **SYNTHETIC** 64-node biome benchmark: 30 simulated days, 7-day offline partition, tamper/replay attack rejection, mid-run revocation — the ADR-264 §14 **fabric reference-model** acceptance test (in-memory library components; the runtime path — store/transport/gateway — is covered by `rucelium-gateway`'s own e2e and restart-attack tests). |
 
 Run the biome acceptance benchmark:
 
