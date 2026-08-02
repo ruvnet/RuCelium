@@ -22,8 +22,8 @@ use rucelium_federation::{
 };
 use rucelium_ingest::{DeviceRegistry, IngestPipeline};
 use rucelium_policy::{
-    AgentProposal, AuditTrail, AuthorityRegistry, CommandSigner, GatewayValidator, PolicyConfig,
-    PolicyEngine, ProposalKind, SafetyConfig, SafetySimulator,
+    verify_receipt, AgentProposal, AuditTrail, AuthorityRegistry, CommandSigner, GatewayValidator,
+    PolicyConfig, PolicyEngine, ProposalKind, SafetyConfig, SafetySimulator,
 };
 use rucelium_worldgraph::{
     assess_plausibility, fuse_rf_context, GraphNode, Plausibility, RfContext, WorldGraph,
@@ -38,6 +38,13 @@ const FLOOD_THRESHOLD_M: f64 = 1.6;
 const BIOME_SEED: &[u8; 32] = b"rucelium-biome-owner-key-32b-v1!";
 /// Governance (control-path) signing seed.
 const GOV_SEED: &[u8; 32] = b"rucelium-governance-key-32b-v01!";
+/// Gateway receipt-signing identity seed (ADR-264 §9: receipts are signed
+/// attestations, so the gateway needs its own deterministic identity).
+const GATEWAY_SEED: &[u8; 32] = b"rucelium-gateway-identity-32b-1!";
+/// Federation key epoch the benchmark registers its biome under.
+const KEY_EPOCH: u32 = 1;
+/// The single actuator the benchmark's biome owner exposes.
+const ACTUATOR_ID: &str = "sluice-gate-1";
 
 /// Build the calibration store: one anchor-rooted record per modality, then
 /// one colocation record per node chaining to its modality anchor.
@@ -150,13 +157,13 @@ fn rf_context_for_day(day: u32, motion_energy: f32) -> RfContext {
 fn run_control_path(biome_id: &str, quarantined_node: u64, now_ns: u64) -> (u64, u64) {
     let mut audit = AuditTrail::new();
     let mut policy_cfg = PolicyConfig::default();
-    policy_cfg.allowed_actuators.insert("sluice-gate-1".into());
+    policy_cfg.allowed_actuators.insert(ACTUATOR_ID.into());
     let engine = PolicyEngine::new(policy_cfg);
     let mut safety = SafetySimulator::new(SafetyConfig::default());
     let mut authority = AuthorityRegistry::new();
-    authority.grant(biome_id, "agent/flood", "sluice-gate-1");
+    authority.grant(biome_id, "agent/flood", ACTUATOR_ID);
     let signer = CommandSigner::from_seed(GOV_SEED);
-    let mut gateway = GatewayValidator::new(vec![signer.public_hex()]);
+    let mut gateway = GatewayValidator::new(vec![signer.public_hex()], GATEWAY_SEED);
 
     let mut executed = 0u64;
     let mut rejected = 0u64;
@@ -180,9 +187,16 @@ fn run_control_path(biome_id: &str, quarantined_node: u64, now_ns: u64) -> (u64,
         .and_then(|s| authority.authorize(s, now_ns, &mut audit))
         .map(|a| signer.sign(a, now_ns, 3_600 * NS_PER_S, &mut audit))
         .and_then(|cmd| {
-            gateway.validate_and_execute(&cmd, now_ns + 1, |_k| "applied".into(), &mut audit)
+            gateway.validate_and_execute(
+                &cmd,
+                now_ns + 1,
+                |_k| Ok("applied".to_string()),
+                &mut audit,
+            )
         });
-    if done.is_ok() {
+    if let Ok(receipt) = &done {
+        // Receipts are gateway-signed attestations (ADR-264 §9).
+        debug_assert!(verify_receipt(receipt), "receipt must verify");
         executed += 1;
     } else {
         rejected += 1;
@@ -194,7 +208,7 @@ fn run_control_path(biome_id: &str, quarantined_node: u64, now_ns: u64) -> (u64,
         agent_id: "agent/flood".into(),
         biome_id: biome_id.into(),
         kind: ProposalKind::ActuatorCommand {
-            actuator_id: "sluice-gate-1".into(),
+            actuator_id: ACTUATOR_ID.into(),
             action: "open_fraction".into(),
             magnitude: 0.5,
         },
@@ -207,9 +221,18 @@ fn run_control_path(biome_id: &str, quarantined_node: u64, now_ns: u64) -> (u64,
         .and_then(|s| authority.authorize(s, now_ns, &mut audit))
         .map(|a| signer.sign(a, now_ns, 3_600 * NS_PER_S, &mut audit))
         .and_then(|cmd| {
-            gateway.validate_and_execute(&cmd, now_ns + 1, |_k| "opened 50%".into(), &mut audit)
+            gateway.validate_and_execute(
+                &cmd,
+                now_ns + 1,
+                |_k| Ok("opened 50%".to_string()),
+                &mut audit,
+            )
         });
-    if done.is_ok() {
+    if let Ok(receipt) = &done {
+        debug_assert!(verify_receipt(receipt), "receipt must verify");
+        // Budgets are checked at safety and charged at execution: only a
+        // command the gateway actually executed consumes the actuator budget.
+        safety.record_execution(ACTUATOR_ID);
         executed += 1;
     } else {
         rejected += 1;
@@ -222,7 +245,7 @@ fn run_control_path(biome_id: &str, quarantined_node: u64, now_ns: u64) -> (u64,
         agent_id: "agent/unknown".into(),
         biome_id: biome_id.into(),
         kind: ProposalKind::ActuatorCommand {
-            actuator_id: "sluice-gate-1".into(),
+            actuator_id: ACTUATOR_ID.into(),
             action: "open_fraction".into(),
             magnitude: 0.7,
         },
@@ -267,7 +290,16 @@ pub fn run(config: SimConfig) -> BiomeReport {
     );
     let mut biome = Biome::new(BiomeConfig::new("biome/synthetic-watershed"), BIOME_SEED);
     let mut bus = FederationBus::new();
-    bus.register_biome(biome.public_key_hex());
+    // Federation identity binding (ADR-264 §6): the bus binds this biome id
+    // to this key at epoch 1 — nothing else may publish under the id.
+    bus.register_biome(
+        biome.config().biome_id.clone(),
+        biome.public_key_hex(),
+        KEY_EPOCH,
+    )
+    .expect("biome registers on the federation bus");
+    // Store-and-forward now buffers the ORIGINAL signed envelopes: decoded
+    // samples cannot be re-verified, so only the wire bytes are replayable.
     let mut buffer = OutageBuffer::new();
 
     // --- Counters / metrics. ---
@@ -332,23 +364,33 @@ pub fn run(config: SimConfig) -> BiomeReport {
         if was_offline && !em.uplink_down {
             was_offline = false;
             // Prove restart-safety: serialize + restore the buffer state,
-            // drain the restored copy, and accept everything.
+            // drain the restored copy, and re-verify every stored envelope
+            // before it may enter the biome. `reverify_stored` runs the full
+            // registry + revocation + key-match + signature + payload checks
+            // WITHOUT touching the anti-replay window (those sequences were
+            // consumed on the live path); duplicate suppression on this path
+            // is the biome's global dedup index.
             let snapshot = buffer.to_json().expect("buffer serializes");
             let mut restored = OutageBuffer::from_json(&snapshot).expect("buffer restores");
-            for s in restored.drain() {
-                match biome.accept(s) {
+            for (envelope, recv_ns) in restored.drain() {
+                let sealed = ingest
+                    .reverify_stored(&envelope, recv_ns)
+                    .expect("buffered envelope re-verifies on restore");
+                match biome.accept(sealed) {
                     AcceptOutcome::Accepted => restored_after_outage += 1,
                     AcceptOutcome::Duplicate => restore_duplicates += 1,
-                    _ => {}
+                    AcceptOutcome::Revoked => {}
                 }
             }
             // Second restore of the SAME snapshot: every sample must dedup.
             let mut again = OutageBuffer::from_json(&snapshot).expect("buffer restores");
-            for s in again.drain() {
-                match biome.accept(s) {
+            for (envelope, recv_ns) in again.drain() {
+                let sealed = ingest
+                    .reverify_stored(&envelope, recv_ns)
+                    .expect("buffered envelope re-verifies on restore");
+                match biome.accept(sealed) {
                     AcceptOutcome::Accepted => restore_duplicates += 1, // duplicates admitted = failure
-                    AcceptOutcome::Duplicate => {}
-                    _ => {}
+                    AcceptOutcome::Duplicate | AcceptOutcome::Revoked => {}
                 }
             }
             buffer = OutageBuffer::new();
@@ -380,7 +422,12 @@ pub fn run(config: SimConfig) -> BiomeReport {
                 }
 
                 // Calibration (lineage-checked affine + stated uncertainty).
-                let outcome = calibrator.apply(&store, &mut sample, em.received_ns);
+                // `modify` keeps the ingest seal across the transformation:
+                // the change is committed only if the result still validates,
+                // so calibration can never smuggle an invalid sample through.
+                let outcome = sample
+                    .modify(|s| calibrator.apply(&store, s, em.received_ns))
+                    .expect("calibrated sample stays valid");
                 let calibrated = matches!(outcome, Ok(CalibrationOutcome::Applied { .. }));
 
                 // Drift monitoring vs the modality anchor expectation,
@@ -389,29 +436,32 @@ pub fn run(config: SimConfig) -> BiomeReport {
                 // drift accounting: drift is a slow, single-sensor
                 // phenomenon; an environmental event (many sensors deviating
                 // together) must not quarantine healthy sensors.
-                let is_local_anomaly = sample.modality == SensorModality::WaterQuality
-                    && sample.value > FLOOD_THRESHOLD_M;
+                // Read access to the sealed sample; the seal never leaves the
+                // wrapper, so nothing downstream can fabricate one.
+                let view = sample.sample();
+                let is_local_anomaly = view.modality == SensorModality::WaterQuality
+                    && view.value > FLOOD_THRESHOLD_M;
                 if !is_local_anomaly {
-                    let t_s = (sample.measured_ns - EPOCH_START_NS) / NS_PER_S;
-                    let expected = anchor_expectation(sample.modality, em.node_index, t_s);
-                    let residual = (sample.value - expected) / (4.0 * noise_sd(sample.modality));
-                    drift.observe(sample.node_id, residual);
+                    let t_s = (view.measured_ns - EPOCH_START_NS) / NS_PER_S;
+                    let expected = anchor_expectation(view.modality, em.node_index, t_s);
+                    let residual = (view.value - expected) / (4.0 * noise_sd(view.modality));
+                    drift.observe(view.node_id, residual);
                 }
-                let quarantined = drift.is_quarantined(sample.node_id);
+                let quarantined = drift.is_quarantined(view.node_id);
                 if quarantined && first_quarantine_ns.is_none() {
                     first_quarantine_ns = Some(em.received_ns);
                 }
 
                 // WorldGraph registration (criterion 6).
-                let key = graph.register_observation(&sample);
+                let key = graph.register_observation(view);
                 let _ = graph.link_within_region(&key, "region/synthetic-watershed");
-                if water_sensor_key.is_none() && sample.modality == SensorModality::WaterQuality {
+                if water_sensor_key.is_none() && view.modality == SensorModality::WaterQuality {
                     water_sensor_key = Some(key.clone());
                 }
                 worldgraph_mapped += 1;
 
                 // SensorThings projection (criterion 6).
-                let bundle = project_sample(&sample);
+                let bundle = project_sample(view);
                 debug_assert!(bundle.observation.result.is_finite());
                 sensorthings_projected += 1;
 
@@ -425,16 +475,16 @@ pub fn run(config: SimConfig) -> BiomeReport {
                         kind: EventKind::FloodRisk,
                         severity: Severity::Warning,
                         modality: SensorModality::WaterQuality,
-                        geo: sample.geo,
-                        window_start_ns: sample.measured_ns,
-                        window_end_ns: sample.measured_ns,
+                        geo: view.geo,
+                        window_start_ns: view.measured_ns,
+                        window_end_ns: view.measured_ns,
                         detected_ns: em.received_ns,
                         evidence: vec![EvidenceRef {
-                            node_id: sample.node_id,
-                            sequence: sample.sequence,
+                            node_id: view.node_id,
+                            sequence: view.sequence,
                         }],
                         confidence: 0.92,
-                        message: format!("water level {:.2} m above flood threshold", sample.value),
+                        message: format!("water level {:.2} m above flood threshold", view.value),
                         signature_hex: None,
                         signer_pubkey_hex: None,
                     };
@@ -450,14 +500,18 @@ pub fn run(config: SimConfig) -> BiomeReport {
 
                 // Usability metric (criterion 8): calibrated, healthy, high
                 // quality. Quarantined-node data stays stored but flagged.
-                if calibrated && !quarantined && sample.quality >= 0.9 {
+                if calibrated && !quarantined && view.quality >= 0.9 {
                     usable += 1;
                 }
 
                 // Biome admission: live when online, store-and-forward when
-                // the uplink is down (the buffer dedups by (node, sequence)).
+                // the uplink is down. The buffer stores the ORIGINAL signed
+                // envelope (dedup key `(node, sequence)` is read structurally)
+                // so restore can re-verify it cryptographically.
                 let admitted = if em.uplink_down {
-                    let pushed = buffer.push(sample);
+                    let pushed = buffer
+                        .push(&em.envelope, em.received_ns)
+                        .expect("genuine envelope decodes structurally");
                     buffered_during_outage += u64::from(pushed);
                     pushed
                 } else {
