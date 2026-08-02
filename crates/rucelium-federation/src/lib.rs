@@ -36,7 +36,10 @@ pub use sensorthings::{
     project_sample, rfc3339_from_ns, Datastream, FeatureOfInterest, GeoJsonPoint, Location,
     Observation, ObservedProperty, Sensor, SensorThingsBundle, Thing, UnitOfMeasurement,
 };
-pub use summary::{verify_summary, FederationBus, FederationError, ModalityStats, RegionalSummary};
+pub use summary::{
+    canonical_succession_bytes, sign_succession, verify_summary, FederationBus, FederationError,
+    KeySuccession, ModalityStats, RegionalSummary,
+};
 
 /// Shared hex + detached-signature helpers (same house style as
 /// `rufield-provenance`).
