@@ -4,6 +4,11 @@
 //! rejections — so a completed happy path leaves exactly seven entries:
 //! `"proposed"`, `"policy_evaluated"`, `"safety_simulated"`, `"authorized"`,
 //! `"signed"`, `"gateway_validated"`, `"executed"`.
+//!
+//! Gateway failure outcomes are recorded too: a replayed command id leaves a
+//! `"gateway_validated"` entry with verdict `"duplicate_rejected: …"`, and a
+//! failed execution closure leaves an `"executed"` entry with verdict
+//! `"execution_failed: …"`.
 
 use serde::Serialize;
 

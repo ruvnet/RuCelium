@@ -243,8 +243,10 @@ pub struct SafetyConfig {
     /// Maximum absolute actuator magnitude the simulator considers safe
     /// (default 0.8 — tighter than the policy default of 1.0).
     pub safe_magnitude: f64,
-    /// Maximum number of commands the simulator will pass per actuator
-    /// (default 10) — a deterministic stand-in for rate limiting.
+    /// Maximum number of **executed** commands per actuator (default 10) —
+    /// a deterministic stand-in for rate limiting. [`SafetySimulator::simulate`]
+    /// checks this budget; only [`SafetySimulator::record_execution`]
+    /// charges it.
     pub max_commands_per_actuator: u32,
 }
 
@@ -280,12 +282,17 @@ impl SimulatedProposal {
     }
 }
 
-/// Stage 2: deterministic safety simulation. Takes `&mut self` because it
-/// tracks how many commands each actuator has been issued.
+/// Stage 2: deterministic safety simulation.
+///
+/// Tracks how many commands each actuator has actually **executed** — but
+/// only [`SafetySimulator::record_execution`] charges that budget.
+/// [`SafetySimulator::simulate`] merely checks it, so a proposal that later
+/// fails authority (or any later gate) cannot drain another actuator's
+/// budget.
 #[derive(Debug, Default, Clone)]
 pub struct SafetySimulator {
     config: SafetyConfig,
-    issued: BTreeMap<String, u32>,
+    executed: BTreeMap<String, u32>,
 }
 
 impl SafetySimulator {
@@ -294,16 +301,29 @@ impl SafetySimulator {
     pub fn new(config: SafetyConfig) -> Self {
         SafetySimulator {
             config,
-            issued: BTreeMap::new(),
+            executed: BTreeMap::new(),
         }
+    }
+
+    /// Charge one executed command against `actuator_id`'s budget.
+    ///
+    /// Call this only after the gateway confirms a command actually executed
+    /// ([`GatewayValidator::validate_and_execute`] returned `Ok`).
+    /// [`SafetySimulator::simulate`] never consumes the budget itself —
+    /// checking is free, executing is what counts.
+    pub fn record_execution(&mut self, actuator_id: &str) {
+        *self.executed.entry(actuator_id.to_string()).or_insert(0) += 1;
     }
 
     /// Run the safety simulation over a policy-evaluated proposal.
     ///
     /// An actuator magnitude beyond [`SafetyConfig::safe_magnitude`] fails
     /// [`ControlError::Unsafe`] even when policy allowed it — policy and
-    /// safety are distinct gates. Records a `"safety_simulated"` audit entry
-    /// either way.
+    /// safety are distinct gates. The per-actuator command budget is
+    /// **checked, not consumed**: only [`SafetySimulator::record_execution`]
+    /// charges it, so repeated simulations (e.g. by an agent that will never
+    /// pass authority) leave the budget untouched. Records a
+    /// `"safety_simulated"` audit entry either way.
     pub fn simulate(
         &mut self,
         p: EvaluatedProposal,
@@ -330,8 +350,8 @@ impl SafetySimulator {
                 );
                 return Err(e);
             }
-            let count = self.issued.entry(actuator_id.clone()).or_insert(0);
-            if *count >= self.config.max_commands_per_actuator {
+            let count = self.executed.get(actuator_id).copied().unwrap_or(0);
+            if count >= self.config.max_commands_per_actuator {
                 let e = ControlError::Unsafe(format!(
                     "actuator {actuator_id} command budget exhausted ({} max)",
                     self.config.max_commands_per_actuator
@@ -344,7 +364,6 @@ impl SafetySimulator {
                 );
                 return Err(e);
             }
-            *count += 1;
         }
         audit.record(
             "safety_simulated",
@@ -587,9 +606,56 @@ impl CommandSigner {
 /// Read-only view of the command kind handed to the execution closure.
 pub type ProposalKindView = ProposalKind;
 
-/// Terminal artifact of the governed control path: proof that a command was
-/// validated and executed exactly once.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// Lifecycle phase of a command id inside the gateway (two-phase execution).
+///
+/// Recorded as `Executing` **before** the execution closure runs, then
+/// promoted to `Executed` or `Failed`. A command id present in *any* phase is
+/// rejected as [`ControlError::DuplicateCommand`] — fail closed. In
+/// particular, an `Executing` entry restored from a journal after a crash is
+/// never re-executed (its physical effect is unknown), and a `Failed` entry
+/// can only be retried under a **new** command id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandPhase {
+    /// All checks passed; the execution closure has started (or the process
+    /// crashed while it was running).
+    Executing,
+    /// The execution closure returned success; a signed receipt was issued.
+    Executed,
+    /// The execution closure reported failure
+    /// ([`ControlError::ExecutionFailed`]).
+    Failed,
+}
+
+impl CommandPhase {
+    /// Stable string form used by [`GatewayValidator::export_phases`] /
+    /// [`GatewayValidator::restore_phases`].
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CommandPhase::Executing => "executing",
+            CommandPhase::Executed => "executed",
+            CommandPhase::Failed => "failed",
+        }
+    }
+
+    fn parse(s: &str) -> Option<Self> {
+        match s {
+            "executing" => Some(CommandPhase::Executing),
+            "executed" => Some(CommandPhase::Executed),
+            "failed" => Some(CommandPhase::Failed),
+            _ => None,
+        }
+    }
+}
+
+/// Terminal artifact of the governed control path: a signed **attestation**
+/// that a command was validated and executed exactly once.
+///
+/// Signed by the gateway's own deterministic ed25519 identity (see
+/// [`GatewayValidator::new`]); verify offline with [`verify_receipt`]. The
+/// signature covers the canonical receipt bytes: `serde_json` of the receipt
+/// with `signature_hex` cleared to the empty string.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExecutionReceipt {
     /// Executed command.
     pub command_id: String,
@@ -600,37 +666,167 @@ pub struct ExecutionReceipt {
     /// `sha256:` over `"{command_id}|{executed_ns}|{outcome}"` — deterministic
     /// for identical runs.
     pub gateway_receipt_hash: String,
+    /// Hex-encoded ed25519 public key of the attesting gateway.
+    pub gateway_pubkey_hex: String,
+    /// Hex-encoded ed25519 signature over the canonical receipt bytes
+    /// (this receipt serialized with `signature_hex` set to `""`).
+    pub signature_hex: String,
 }
 
-/// Stages 5 and 6: gateway-side validation and local execution.
+/// Canonical bytes a receipt signature covers: the receipt serialized with
+/// its `signature_hex` field cleared.
+fn receipt_canonical_bytes(receipt: &ExecutionReceipt) -> Vec<u8> {
+    let mut unsigned = receipt.clone();
+    unsigned.signature_hex = String::new();
+    // Infallible: string and integer fields only.
+    serde_json::to_vec(&unsigned).expect("ExecutionReceipt serialization cannot fail")
+}
+
+/// Verify a receipt's gateway attestation: the ed25519 signature in
+/// `signature_hex` must verify over the canonical receipt bytes under
+/// `gateway_pubkey_hex`. Returns `false` on any tampering or malformed
+/// key/signature material.
+///
+/// Note this checks the receipt is *authentic and untampered*; whether the
+/// attesting gateway key is one you trust is the caller's decision.
+#[must_use]
+pub fn verify_receipt(receipt: &ExecutionReceipt) -> bool {
+    let Ok(pk_bytes) = hex_decode(&receipt.gateway_pubkey_hex) else {
+        return false;
+    };
+    let Ok(pk_arr) = <[u8; 32]>::try_from(pk_bytes) else {
+        return false;
+    };
+    let Ok(vk) = VerifyingKey::from_bytes(&pk_arr) else {
+        return false;
+    };
+    let Ok(sig_bytes) = hex_decode(&receipt.signature_hex) else {
+        return false;
+    };
+    let Ok(sig_arr) = <[u8; 64]>::try_from(sig_bytes) else {
+        return false;
+    };
+    let sig = Signature::from_bytes(&sig_arr);
+    vk.verify(&receipt_canonical_bytes(receipt), &sig).is_ok()
+}
+
+/// Stages 5 and 6: gateway-side validation and two-phase local execution.
 ///
 /// Checks, in order: the signer key is trusted
 /// ([`ControlError::UntrustedKey`]), the signature verifies over the
 /// canonical bytes ([`ControlError::BadSignature`]), the command has not
-/// expired ([`ControlError::Expired`]), and the command id has not already
-/// executed ([`ControlError::DuplicateCommand`] — replay protection). Only
-/// then does the execution closure run, exactly once per command id.
-#[derive(Debug, Clone)]
+/// expired ([`ControlError::Expired`]), the command id is not already known
+/// in any [`CommandPhase`] ([`ControlError::DuplicateCommand`] — fail-closed
+/// replay protection), and the target actuator is under its executed-command
+/// cap ([`ControlError::Unsafe`]). Only then does the execution closure run,
+/// at most once per command id, bracketed by phase records so a crash can
+/// never leave a command silently marked complete.
+///
+/// The gateway owns the disk: [`GatewayValidator::export_phases`] and
+/// [`GatewayValidator::restore_phases`] let a daemon journal the phase table
+/// and restore it across restarts.
+#[derive(Clone)]
 pub struct GatewayValidator {
     trusted: BTreeSet<String>,
-    executed: BTreeSet<String>,
+    phases: BTreeMap<String, CommandPhase>,
+    executed_per_actuator: BTreeMap<String, u32>,
+    max_commands_per_actuator: u32,
+    identity: SigningKey,
+}
+
+impl std::fmt::Debug for GatewayValidator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GatewayValidator")
+            .field("trusted", &self.trusted)
+            .field("phases", &self.phases)
+            .field("executed_per_actuator", &self.executed_per_actuator)
+            .field("max_commands_per_actuator", &self.max_commands_per_actuator)
+            .field("gateway_pubkey_hex", &self.gateway_pubkey_hex())
+            .finish()
+    }
 }
 
 impl GatewayValidator {
-    /// Validator trusting the given hex-encoded ed25519 public keys.
+    /// Validator trusting the given hex-encoded ed25519 public keys, with a
+    /// deterministic ed25519 gateway identity derived from `gateway_seed`
+    /// (same seed ⇒ same identity ⇒ same receipt signatures). Every
+    /// [`ExecutionReceipt`] it issues is signed by this identity.
+    ///
+    /// The per-actuator executed-command cap defaults to unlimited
+    /// (`u32::MAX`); tighten it with
+    /// [`GatewayValidator::with_max_commands_per_actuator`].
     #[must_use]
-    pub fn new(trusted_keys: Vec<String>) -> Self {
+    pub fn new(trusted_keys: Vec<String>, gateway_seed: &[u8; 32]) -> Self {
         GatewayValidator {
             trusted: trusted_keys.into_iter().collect(),
-            executed: BTreeSet::new(),
+            phases: BTreeMap::new(),
+            executed_per_actuator: BTreeMap::new(),
+            max_commands_per_actuator: u32::MAX,
+            identity: SigningKey::from_bytes(gateway_seed),
+        }
+    }
+
+    /// Cap the number of commands this gateway will **execute** per actuator
+    /// (defence in depth alongside [`SafetyConfig::max_commands_per_actuator`]
+    /// — the gateway counts only commands it actually executed, so failed
+    /// validations and failed executions never consume the cap).
+    #[must_use]
+    pub fn with_max_commands_per_actuator(mut self, cap: u32) -> Self {
+        self.max_commands_per_actuator = cap;
+        self
+    }
+
+    /// Hex-encoded ed25519 public key of this gateway's receipt-signing
+    /// identity — matches [`ExecutionReceipt::gateway_pubkey_hex`].
+    #[must_use]
+    pub fn gateway_pubkey_hex(&self) -> String {
+        hex_encode(self.identity.verifying_key().as_bytes())
+    }
+
+    /// Snapshot of the command phase table as `(command_id, phase)` pairs
+    /// (phase strings: `"executing"`, `"executed"`, `"failed"`), in command-id
+    /// order. A daemon journals this to disk after every execution attempt
+    /// and feeds it back through [`GatewayValidator::restore_phases`] on
+    /// restart.
+    #[must_use]
+    pub fn export_phases(&self) -> Vec<(String, String)> {
+        self.phases
+            .iter()
+            .map(|(id, phase)| (id.clone(), phase.as_str().to_string()))
+            .collect()
+    }
+
+    /// Restore a journaled phase table (see
+    /// [`GatewayValidator::export_phases`]). Entries with unknown phase
+    /// strings are skipped. Restored command ids are rejected as
+    /// [`ControlError::DuplicateCommand`] in **every** phase — including
+    /// `Executing`, the fail-closed crash-recovery posture: a command that
+    /// was mid-execution when the process died must not run again.
+    pub fn restore_phases(&mut self, phases: impl IntoIterator<Item = (String, String)>) {
+        for (command_id, phase) in phases {
+            if let Some(parsed) = CommandPhase::parse(&phase) {
+                self.phases.insert(command_id, parsed);
+            }
         }
     }
 
     /// Validate a signed command and, on success, run `execute` (the local
-    /// execution) and return the [`ExecutionReceipt`]. Records
-    /// `"gateway_validated"` (with the verdict, pass or fail) and, on
-    /// success, `"executed"` audit entries.
-    pub fn validate_and_execute<F: FnOnce(&ProposalKindView) -> String>(
+    /// execution, returning outcome or failure reason) under two-phase
+    /// recording:
+    ///
+    /// 1. all checks pass → the command id is recorded as
+    ///    [`CommandPhase::Executing`];
+    /// 2. the closure runs;
+    /// 3. `Ok(outcome)` → phase [`CommandPhase::Executed`], signed
+    ///    [`ExecutionReceipt`] returned; `Err(reason)` → phase
+    ///    [`CommandPhase::Failed`], [`ControlError::ExecutionFailed`]
+    ///    returned.
+    ///
+    /// Records `"gateway_validated"` (verdict pass, `"rejected: …"`, or
+    /// `"duplicate_rejected: …"` for replays) and, after the closure, an
+    /// `"executed"` entry (verdict `"outcome: …"` or `"execution_failed: …"`)
+    /// in the audit trail.
+    pub fn validate_and_execute<F: FnOnce(&ProposalKindView) -> Result<String, String>>(
         &mut self,
         cmd: &SignedCommand,
         now_ns: u64,
@@ -645,12 +841,11 @@ impl GatewayValidator {
             .unwrap_or(&cmd.payload.command_id)
             .to_string();
         if let Err(e) = self.check(cmd, now_ns) {
-            audit.record(
-                "gateway_validated",
-                &proposal_id,
-                now_ns,
-                format!("rejected: {e}"),
-            );
+            let verdict = match &e {
+                ControlError::DuplicateCommand(id) => format!("duplicate_rejected: {id}"),
+                _ => format!("rejected: {e}"),
+            };
+            audit.record("gateway_validated", &proposal_id, now_ns, verdict);
             return Err(e);
         }
         audit.record(
@@ -659,22 +854,66 @@ impl GatewayValidator {
             now_ns,
             "signature and freshness ok",
         );
-        self.executed.insert(cmd.payload.command_id.clone());
-        let outcome = execute(&cmd.payload.kind);
+        // Phase 1: journal intent before any side effect, so a crash inside
+        // the closure leaves an `Executing` record — never a command silently
+        // marked complete without a receipt.
+        self.phases
+            .insert(cmd.payload.command_id.clone(), CommandPhase::Executing);
+        match execute(&cmd.payload.kind) {
+            Ok(outcome) => {
+                // Phase 2a: success.
+                self.phases
+                    .insert(cmd.payload.command_id.clone(), CommandPhase::Executed);
+                if let ProposalKind::ActuatorCommand { actuator_id, .. } = &cmd.payload.kind {
+                    *self
+                        .executed_per_actuator
+                        .entry(actuator_id.clone())
+                        .or_insert(0) += 1;
+                }
+                audit.record(
+                    "executed",
+                    &proposal_id,
+                    now_ns,
+                    format!("outcome: {outcome}"),
+                );
+                Ok(self.build_receipt(cmd.payload.command_id.clone(), now_ns, outcome))
+            }
+            Err(reason) => {
+                // Phase 2b: failure — recorded, audited, and never retryable
+                // under this command id.
+                self.phases
+                    .insert(cmd.payload.command_id.clone(), CommandPhase::Failed);
+                audit.record(
+                    "executed",
+                    &proposal_id,
+                    now_ns,
+                    format!("execution_failed: {reason}"),
+                );
+                Err(ControlError::ExecutionFailed(reason))
+            }
+        }
+    }
+
+    /// Build and sign the receipt for a successfully executed command.
+    fn build_receipt(
+        &self,
+        command_id: String,
+        executed_ns: u64,
+        outcome: String,
+    ) -> ExecutionReceipt {
         let gateway_receipt_hash =
-            sha256_hex(format!("{}|{now_ns}|{outcome}", cmd.payload.command_id).as_bytes());
-        audit.record(
-            "executed",
-            &proposal_id,
-            now_ns,
-            format!("outcome: {outcome}"),
-        );
-        Ok(ExecutionReceipt {
-            command_id: cmd.payload.command_id.clone(),
-            executed_ns: now_ns,
+            sha256_hex(format!("{command_id}|{executed_ns}|{outcome}").as_bytes());
+        let mut receipt = ExecutionReceipt {
+            command_id,
+            executed_ns,
             outcome,
             gateway_receipt_hash,
-        })
+            gateway_pubkey_hex: self.gateway_pubkey_hex(),
+            signature_hex: String::new(),
+        };
+        let sig: Signature = self.identity.sign(&receipt_canonical_bytes(&receipt));
+        receipt.signature_hex = hex_encode(&sig.to_bytes());
+        receipt
     }
 
     fn check(&self, cmd: &SignedCommand, now_ns: u64) -> Result<(), ControlError> {
@@ -700,10 +939,25 @@ impl GatewayValidator {
                 now_ns,
             });
         }
-        if self.executed.contains(&cmd.payload.command_id) {
+        // Fail closed: a command id in ANY phase (Executing from a crashed
+        // run, Executed, or Failed) is never executed again.
+        if self.phases.contains_key(&cmd.payload.command_id) {
             return Err(ControlError::DuplicateCommand(
                 cmd.payload.command_id.clone(),
             ));
+        }
+        if let ProposalKind::ActuatorCommand { actuator_id, .. } = &cmd.payload.kind {
+            let executed = self
+                .executed_per_actuator
+                .get(actuator_id)
+                .copied()
+                .unwrap_or(0);
+            if executed >= self.max_commands_per_actuator {
+                return Err(ControlError::Unsafe(format!(
+                    "actuator {actuator_id} executed-command cap exhausted at gateway ({} max)",
+                    self.max_commands_per_actuator
+                )));
+            }
         }
         Ok(())
     }

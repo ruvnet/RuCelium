@@ -11,20 +11,42 @@
 //! * [`EventStore`] — [`rucelium_core::EnvironmentalEvent`]s, deduped by
 //!   `event_id`, files `evt-NNNNNN.jsonl`.
 //!
-//! ## Design notes (v0.1)
+//! ## Design notes
 //!
-//! * **Durability**: every append is flushed to the OS (`File::flush`) but
-//!   *not* fsynced — a host power loss may lose the tail, which crash
-//!   recovery then treats as a torn tail. fsync batching is future work.
-//! * **Crash recovery**: on open, a torn (unparsable) *final* line of the
-//!   *final* segment is truncated away — a crash mid-write must not poison
-//!   the store. Malformed data anywhere else is [`StoreError::Corrupt`].
+//! * **Durability** is a per-store choice: `open(dir, segment_max_records,
+//!   sync)`. With `sync = true`, every accepted append is
+//!   `sync_data()`-fsynced — segment file *and* dedup index — before
+//!   `append` returns, so an accepted record survives OS crash and power
+//!   loss (to the extent the storage stack honors fsync). With
+//!   `sync = false`, appends are only flushed to the OS page cache
+//!   (`File::flush`): a *process* crash loses nothing already flushed, but
+//!   a host power loss or kernel panic may lose the unsynced tail; crash
+//!   recovery then treats the partial last line as a torn tail, and any
+//!   fully-lost trailing records are simply absent (callers must be able
+//!   to replay them). "Durable" below means durable *for the chosen mode*.
+//! * **Integrity**: each stored line is `<crc32-hex> <json>` — CRC-32
+//!   (IEEE) over the exact JSON bytes. On open a newline-terminated line
+//!   whose CRC does not match is [`StoreError::Corrupt`] with reason
+//!   `"crc mismatch"` — an integrity failure, never repaired. Legacy lines
+//!   of bare JSON (written before the CRC prefix existed) are still
+//!   accepted on read; new writes always carry a CRC.
+//! * **Crash recovery**: on open, a *final* line of the *final* segment
+//!   that lacks its trailing newline and cannot be decoded (partial JSON
+//!   or an incomplete CRC prefix) is a torn write and is truncated away —
+//!   a crash mid-write must not poison the store. Malformed data anywhere
+//!   else is [`StoreError::Corrupt`].
 //! * **Retention** is segment-level: whole expired segment files are
 //!   deleted, never rewritten — cheap and O(1) per segment. The current
 //!   (last) segment is never deleted.
-//! * **Dedup memory**: dedup keys are kept forever, even after retention
-//!   deletes their payload segments. Keys are tiny (a `(u64, u32)` pair or a
-//!   short id string); retention frees payload bytes, not dedup memory.
+//! * **Dedup persistence**: every accepted key is also appended to a
+//!   per-store `dedup.idx` file (observations: `node_id sequence` per
+//!   line; events: one `event_id` per line). On open the index file is
+//!   authoritative; keys found in segments but missing from the index
+//!   (legacy directories) are merged in and written back. Dedup keys are
+//!   kept forever — in memory *and* in `dedup.idx` — even after retention
+//!   deletes their payload segments, so replaying an expired record after
+//!   a restart is still a duplicate. Keys are tiny (a `(u64, u32)` pair or
+//!   a short id string); retention frees payload bytes, not dedup state.
 //! * **Determinism**: the library never reads a wall clock — callers pass
 //!   `now_ns` to [`ObservationStore::enforce_retention`].
 
@@ -86,7 +108,9 @@ impl From<std::io::Error> for StoreError {
 /// Result of an append attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppendOutcome {
-    /// The record was new and is now durable in the current segment.
+    /// The record was new and was written to the current segment (fsynced
+    /// when the store was opened with `sync = true`; otherwise flushed to
+    /// the OS only — see the crate durability notes).
     Appended,
     /// The record's dedup key was already known; nothing was written.
     Duplicate,
