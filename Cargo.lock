@@ -895,6 +895,90 @@ dependencies = [
 ]
 
 [[package]]
+name = "rucelium-abi"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "rucelium-core",
+ "sha2",
+]
+
+[[package]]
+name = "rucelium-bench"
+version = "0.1.0"
+dependencies = [
+ "rucelium-abi",
+ "rucelium-calibration",
+ "rucelium-core",
+ "rucelium-federation",
+ "rucelium-ingest",
+ "rucelium-policy",
+ "rucelium-worldgraph",
+ "rufield-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "rucelium-calibration"
+version = "0.1.0"
+dependencies = [
+ "rucelium-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "rucelium-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "rucelium-federation"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "rucelium-core",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "rucelium-ingest"
+version = "0.1.0"
+dependencies = [
+ "rucelium-abi",
+ "rucelium-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "rucelium-policy"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "rucelium-core",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "rucelium-worldgraph"
+version = "0.1.0"
+dependencies = [
+ "rucelium-core",
+ "rufield-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "rufield-adapters"
 version = "0.1.0"
 dependencies = [
@@ -974,90 +1058,6 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tower",
-]
-
-[[package]]
-name = "rumycelium-abi"
-version = "0.1.0"
-dependencies = [
- "ed25519-dalek",
- "rumycelium-core",
- "sha2",
-]
-
-[[package]]
-name = "rumycelium-bench"
-version = "0.1.0"
-dependencies = [
- "rufield-core",
- "rumycelium-abi",
- "rumycelium-calibration",
- "rumycelium-core",
- "rumycelium-federation",
- "rumycelium-ingest",
- "rumycelium-policy",
- "rumycelium-worldgraph",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "rumycelium-calibration"
-version = "0.1.0"
-dependencies = [
- "rumycelium-core",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "rumycelium-core"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "rumycelium-federation"
-version = "0.1.0"
-dependencies = [
- "ed25519-dalek",
- "rumycelium-core",
- "serde",
- "serde_json",
- "sha2",
-]
-
-[[package]]
-name = "rumycelium-ingest"
-version = "0.1.0"
-dependencies = [
- "rumycelium-abi",
- "rumycelium-core",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "rumycelium-policy"
-version = "0.1.0"
-dependencies = [
- "ed25519-dalek",
- "rumycelium-core",
- "serde",
- "serde_json",
- "sha2",
-]
-
-[[package]]
-name = "rumycelium-worldgraph"
-version = "0.1.0"
-dependencies = [
- "rufield-core",
- "rumycelium-core",
- "serde",
- "serde_json",
 ]
 
 [[package]]
