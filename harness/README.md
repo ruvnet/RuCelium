@@ -68,6 +68,22 @@ instead of rejecting it.
 64-node pilot would have to clear (on synthetic data; see the honesty notes
 in the ADR).
 
+## Prior art and convergence
+
+This harness and [`agentic-flow`](https://github.com/ruvnet/agentic-flow)
+arrived at the same principle independently — **freeze the model, evolve the
+harness**, and select on measured fitness rather than tuning the model. Credit
+where it is due: `agentic-flow` states that principle explicitly and
+implements it far more broadly (trajectory rewards, adaptive routing,
+retrieve → judge → distill → consolidate).
+
+`rucelium-harness` stays narrow on purpose: its fitness function is
+domain-specific (workspace tests + clippy + the ADR-264 §14 acceptance
+benchmark) and it must run with **zero network** inside CI. If `agentic-flow`
+exposes a pluggable fitness interface, this should become a fitness provider
+for it rather than a parallel loop — see
+[ADR-268](../docs/ADR-268-rucelium-ruvnet-stack-integration.md) §2.4.
+
 ## Using it from an agent swarm
 
 The flywheel is designed to be driven by coding agents: after each edit
