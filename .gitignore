@@ -1,0 +1,9 @@
+/target
+**/*.rs.bk
+Cargo.lock.bak
+*.pdb
+.claude-flow/
+
+# RuCelium metaharness generation ledger (commit deliberately if you want shared lineage)
+.rucelium/
+harness/node_modules/
