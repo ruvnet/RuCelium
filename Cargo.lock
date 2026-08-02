@@ -948,6 +948,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "rucelium-gateway"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "reqwest",
+ "rucelium-abi",
+ "rucelium-calibration",
+ "rucelium-core",
+ "rucelium-federation",
+ "rucelium-ingest",
+ "rucelium-store",
+ "rucelium-transport",
+ "rucelium-worldgraph",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower",
+]
+
+[[package]]
 name = "rucelium-ingest"
 version = "0.1.0"
 dependencies = [
@@ -966,6 +986,23 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+]
+
+[[package]]
+name = "rucelium-store"
+version = "0.1.0"
+dependencies = [
+ "rucelium-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "rucelium-transport"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "rucelium-abi",
 ]
 
 [[package]]

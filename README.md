@@ -114,6 +114,35 @@ cargo run -p rucelium-bench -- 2026 --json
 > windows, dedup, quarantine, revocation, projection) against known ground
 > truth. It is not a field deployment.
 
+### Runtime — run a gateway (ADR-265)
+
+The fabric is not only libraries — it runs. [ADR-265](./docs/ADR-265-rucelium-runtime.md)
+adds the runtime layer:
+
+| Crate | Description |
+|-------|-------------|
+| [`rucelium-store`](crates/rucelium-store) | Durable append-only segmented store: dedup index rebuilt on open, torn-tail crash recovery, deterministic replay, per-DataClass retention that deletes whole expired segments. |
+| [`rucelium-transport`](crates/rucelium-transport) | Constrained-link transport: compact **114-byte envelope v2** (pubkey by reference — v1's ~150 bytes doesn't fit LoRaWAN DR0's 51-byte cap) + MTU fragmentation/reassembly (exactly 3 DR0 datagrams per envelope, loss/duplication/reorder tolerant). |
+| [`rucelium-gateway`](crates/rucelium-gateway) | The rhizome daemon: UDP envelope ingestion (v1/v2/fragments) → signature + anti-replay → calibration + quarantine → disk → WorldGraph → local alerts, an OGC SensorThings HTTP API, and **federation sync** — peers exchange only signed summaries and revocations, verified before use. |
+
+```bash
+# Start a gateway with a built-in synthetic spore swarm (no hardware, SYNTHETIC):
+cargo run -p rucelium-gateway -- --simulate 16
+
+# Then:
+curl -s localhost:7465/api/stats | jq
+curl -s localhost:7465/api/sensorthings/Observations | jq '.value[0]'
+
+# Two-biome federation on one machine:
+cargo run -p rucelium-gateway -- --biome-id biome/a --udp 7464 --http 7465
+cargo run -p rucelium-gateway -- --biome-id biome/b --udp 7474 --http 7475 \
+    --peer http://127.0.0.1:7465
+```
+
+`rucelium-abi` also gains a `std` default feature: with
+`--no-default-features --features alloc` the wire format + deterministic CBOR
+compile for `no_std` targets, so Rust-based spore nodes can share the encoder.
+
 ### Metaharness — the Darwin flywheel
 
 [`harness/`](harness) ships **`rucelium-harness`**, a zero-dependency npm
