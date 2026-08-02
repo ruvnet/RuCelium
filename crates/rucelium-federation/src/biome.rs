@@ -263,6 +263,17 @@ impl Biome {
     /// canonical JSON of the event with both signature fields cleared (same
     /// pattern as `rufield-provenance`).
     pub fn sign_event(&self, event: &mut EnvironmentalEvent) {
+        // Fail closed: never mint a signature over a payload that cannot
+        // survive its own wire format (see `crate::round_trips`). A
+        // non-finite float becomes JSON `null`, which verifies in-process and
+        // is unparseable at the peer — so leave it unsigned and let
+        // `FederationBus::publish_event` reject it as `Unsigned`, rather than
+        // shipping an artifact that looks valid and is not.
+        if !crate::round_trips(event) {
+            event.signature_hex = None;
+            event.signer_pubkey_hex = None;
+            return;
+        }
         let bytes = canonical_event_bytes(event);
         let signature: Signature = self.key.sign(&bytes);
         event.signature_hex = Some(sig::hex_encode(&signature.to_bytes()));

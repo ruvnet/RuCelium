@@ -134,6 +134,12 @@ impl Biome {
     /// Sign a summary in place with the biome key (canonical bytes with the
     /// signature fields cleared, same pattern as event signing).
     pub fn sign_summary(&self, summary: &mut RegionalSummary) {
+        // Fail closed — see `Biome::sign_event` and `crate::round_trips`.
+        if !crate::round_trips(summary) {
+            summary.signature_hex = None;
+            summary.signer_pubkey_hex = None;
+            return;
+        }
         let bytes = canonical_summary_bytes(summary);
         let signature: Signature = self.signing_key().sign(&bytes);
         summary.signature_hex = Some(sig::hex_encode(&signature.to_bytes()));
@@ -1116,5 +1122,110 @@ mod tests {
         assert_eq!(s, received);
         bus.rotate_biome(&received)
             .expect("verifies after the wire");
+    }
+
+    // --- wire-faithfulness: sign only what round-trips -----------------------
+
+    /// JSON has no NaN and no Infinity — `serde_json` writes both as `null`,
+    /// and parsing `null` into an f32 fails. So a signature over a non-finite
+    /// float verifies IN-PROCESS and is unparseable at the peer: signable,
+    /// undeliverable. The signing path must refuse instead.
+    #[test]
+    fn a_non_finite_float_is_never_signed() {
+        let b = biome_with_data();
+        let mut src = biome_with_data();
+        let template = src.revoke_device(1, 10_000, "compromised");
+        for poison in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let mut ev = template.clone();
+            ev.confidence = poison;
+            b.sign_event(&mut ev);
+            assert!(
+                ev.signature_hex.is_none(),
+                "{poison:?} must not be signed — it cannot survive the wire"
+            );
+            assert!(!verify_event(&ev));
+
+            // And the bus rejects it rather than accepting an unusable artifact.
+            let mut bus = registered_bus(&b);
+            assert_eq!(bus.publish_event(ev), Err(FederationError::Unsigned));
+        }
+    }
+
+    /// The same guard on summaries.
+    #[test]
+    fn a_summary_with_a_non_finite_stat_is_never_signed() {
+        let b = biome_with_data();
+        let mut sum = b.summarize(0, 5_000);
+        assert!(verify_summary(&sum), "the honest summary signs");
+
+        sum.stats.insert(
+            "weather".into(),
+            ModalityStats {
+                count: 1,
+                mean: f64::NAN,
+                min: 0.0,
+                max: 1.0,
+                mean_quality: 1.0,
+            },
+        );
+        b.sign_summary(&mut sum);
+        assert!(sum.signature_hex.is_none());
+        assert!(!verify_summary(&sum));
+    }
+
+    /// `round_trips` is the invariant itself: true exactly when serialize →
+    /// parse → compare is an identity.
+    #[test]
+    fn round_trips_detects_exactly_the_unfaithful() {
+        let b = biome_with_data();
+        let good = b.summarize(0, 5_000);
+        assert!(crate::round_trips(&good));
+
+        let mut bad = good.clone();
+        bad.stats.insert(
+            "acoustic".into(),
+            ModalityStats {
+                count: 1,
+                mean: 1.0,
+                min: f64::NEG_INFINITY,
+                max: 1.0,
+                mean_quality: 1.0,
+            },
+        );
+        assert!(!crate::round_trips(&bad));
+
+        // Awkward-but-finite values are fine — this is not a blanket ban on
+        // hard floats, only on ones JSON cannot represent.
+        let mut fine = good.clone();
+        fine.stats.insert(
+            "soil_moisture".into(),
+            ModalityStats {
+                count: 3,
+                mean: 23.470000000000002,
+                min: 0.1 + 0.2,
+                max: f64::MIN_POSITIVE,
+                mean_quality: 0.9700000000000001,
+            },
+        );
+        assert!(crate::round_trips(&fine));
+    }
+
+    /// A real summarize() can never produce a non-finite stat: an accumulator
+    /// exists only when it has at least one sample, so there is no 0/0, and
+    /// sample values are validated finite before they are ever accepted.
+    #[test]
+    fn summarize_cannot_produce_non_finite_stats() {
+        let b = biome_with_data();
+        for window in [(0, 5_000), (0, u64::MAX), (9_000, 9_001), (7_000, 7_000)] {
+            let s = b.summarize(window.0, window.1);
+            for (k, st) in &s.stats {
+                assert!(st.mean.is_finite(), "{k} mean");
+                assert!(st.min.is_finite(), "{k} min");
+                assert!(st.max.is_finite(), "{k} max");
+                assert!(st.mean_quality.is_finite(), "{k} mean_quality");
+            }
+            // An empty window yields no stats at all — not NaN-filled ones.
+            assert!(crate::round_trips(&s));
+        }
     }
 }

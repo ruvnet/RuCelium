@@ -41,6 +41,34 @@ pub use summary::{
     KeySuccession, ModalityStats, RegionalSummary,
 };
 
+/// Does this artifact survive its own wire format?
+///
+/// Serialize it, parse it back, and require the result to be *equal*. This is
+/// the invariant every signature in the fabric silently depends on: a peer
+/// verifies by re-serializing what it parsed, so an artifact that cannot
+/// round-trip is signable but undeliverable — it verifies in-process and dies
+/// at the far end.
+///
+/// The concrete hazard is non-finite floats. JSON has no NaN and no Infinity,
+/// so `serde_json` writes both as `null` — indistinguishably — and parsing
+/// `null` back into an `f32`/`f64` field fails outright. A signature over
+/// such a payload is worse than no signature: it looks valid locally and is
+/// unusable everywhere else.
+///
+/// Used by the signing paths to **refuse to sign** rather than mint an
+/// artifact that cannot be verified by the peer it is meant for.
+pub fn round_trips<T>(value: &T) -> bool
+where
+    T: serde::Serialize + serde::de::DeserializeOwned + PartialEq,
+{
+    match serde_json::to_vec(value) {
+        Ok(bytes) => serde_json::from_slice::<T>(&bytes)
+            .map(|parsed| &parsed == value)
+            .unwrap_or(false),
+        Err(_) => false,
+    }
+}
+
 /// Shared hex + detached-signature helpers (same house style as
 /// `rufield-provenance`).
 pub(crate) mod sig {
