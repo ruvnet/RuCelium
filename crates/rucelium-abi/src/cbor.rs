@@ -8,7 +8,9 @@
 //! signature over the one possible encoding.
 
 use crate::wire::{RvEnvSampleV1, RV_ENV_SAMPLE_V1_WIRE_LEN};
-use std::fmt;
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+use core::fmt;
 
 /// CBOR decode errors.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,6 +65,7 @@ impl fmt::Display for CborError {
     }
 }
 
+#[cfg(feature = "std")]
 impl std::error::Error for CborError {}
 
 // ---------------------------------------------------------------------------

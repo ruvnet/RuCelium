@@ -19,12 +19,20 @@
 //!     https://github.com/ruvnet/rufield/blob/main/crates/rucelium-abi/include/rucelium_env.h
 
 #![doc(html_root_url = "https://docs.rs/rucelium-abi/0.1.0")]
+#![cfg_attr(not(feature = "std"), no_std)]
 
+#[cfg(feature = "alloc")]
+extern crate alloc;
+
+#[cfg(feature = "alloc")]
 pub mod cbor;
+#[cfg(feature = "std")]
 pub mod sign;
 pub mod wire;
 
+#[cfg(feature = "alloc")]
 pub use cbor::{CborError, SignedEnvRecordV1};
+#[cfg(feature = "std")]
 pub use sign::{sign_payload, verify_record, NodeSigner};
 pub use wire::{
     AbiError, RvEnvSampleV1, RV_ENV_FLAG_RETRANSMIT, RV_ENV_SAMPLE_V1_WIRE_LEN, RV_ENV_SCHEMA_V1,

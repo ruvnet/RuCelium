@@ -2,9 +2,18 @@
 //! allocation-free parse, field validation, and domain conversion
 //! (ADR-264 §11.1).
 
-use rucelium_core::geo::{LAT_E7_MAX, LON_E7_MAX};
+use core::fmt;
+#[cfg(feature = "std")]
 use rucelium_core::{EnvSample, GeoPoint, SampleProvenance, SensorModality, Uncertainty};
-use std::fmt;
+
+/// Maximum valid latitude in 1e-7 degree units. Defined locally so the wire
+/// layer stays `no_std`; a std-only test pins it to `rucelium_core::geo`.
+pub const LAT_E7_MAX: i32 = 900_000_000;
+/// Maximum valid longitude in 1e-7 degree units (see [`LAT_E7_MAX`]).
+pub const LON_E7_MAX: i32 = 1_800_000_000;
+/// Highest valid `sensor_type` wire code. Pinned to
+/// `rucelium_core::SensorModality::ALL` by a std-only test.
+pub const SENSOR_TYPE_MAX: u8 = 9;
 
 /// Wire schema version 1.
 pub const RV_ENV_SCHEMA_V1: u8 = 1;
@@ -44,7 +53,9 @@ pub enum AbiError {
     QualityOutOfRange(u16),
     /// Zero measurement timestamp.
     ZeroTimestamp,
-    /// Domain validation failed after conversion.
+    /// Domain validation failed after conversion (std only — conversion into
+    /// the domain model requires `rucelium-core`).
+    #[cfg(feature = "std")]
     Domain(String),
 }
 
@@ -64,11 +75,13 @@ impl fmt::Display for AbiError {
                 write!(f, "quality_q15 {q:#06x} above Q15 1.0 ({:#06x})", Q15_ONE)
             }
             AbiError::ZeroTimestamp => write!(f, "zero measurement timestamp"),
+            #[cfg(feature = "std")]
             AbiError::Domain(m) => write!(f, "domain validation failed: {m}"),
         }
     }
 }
 
+#[cfg(feature = "std")]
 impl std::error::Error for AbiError {}
 
 /// Rust mirror of the C `rv_env_sample_v1` struct (ADR-264 §11.1). `repr(C)`
@@ -185,7 +198,7 @@ impl RvEnvSampleV1 {
         if self.schema_version != RV_ENV_SCHEMA_V1 {
             return Err(AbiError::BadSchemaVersion(self.schema_version));
         }
-        if SensorModality::from_code(self.sensor_type).is_none() {
+        if self.sensor_type > SENSOR_TYPE_MAX {
             return Err(AbiError::UnknownModality(self.sensor_type));
         }
         if self.latitude_e7.abs() > LAT_E7_MAX {
@@ -203,7 +216,9 @@ impl RvEnvSampleV1 {
         Ok(())
     }
 
-    /// The modality, if the code is known.
+    /// The modality, if the code is known (std only — the registry lives in
+    /// `rucelium-core`).
+    #[cfg(feature = "std")]
     #[must_use]
     pub fn modality(&self) -> Option<SensorModality> {
         SensorModality::from_code(self.sensor_type)
@@ -222,10 +237,11 @@ impl RvEnvSampleV1 {
     }
 
     /// Convert a **validated** wire record into an *uncalibrated* domain
-    /// [`EnvSample`]. The uncertainty starts at the Q16.16 quantization
+    /// [`EnvSample`] (std only — requires `rucelium-core`). The uncertainty starts at the Q16.16 quantization
     /// half-step; `rucelium-calibration` widens it with the calibration's
     /// stated uncertainty. Provenance identity comes from the verified wire
     /// envelope, supplied by the ingest pipeline.
+    #[cfg(feature = "std")]
     pub fn to_env_sample(
         &self,
         received_ns: u64,
@@ -369,6 +385,21 @@ mod tests {
         assert_eq!(env.provenance.lineage, vec!["abi:rv_env_sample_v1"]);
         // Quantization uncertainty brackets the value.
         assert!(env.uncertainty.lower <= env.value && env.value <= env.uncertainty.upper);
+    }
+
+    #[test]
+    fn local_constants_pin_the_core_registry() {
+        // The no_std wire layer duplicates these so it can drop rucelium-core;
+        // this std-only test keeps the copies honest.
+        assert_eq!(LAT_E7_MAX, rucelium_core::geo::LAT_E7_MAX);
+        assert_eq!(LON_E7_MAX, rucelium_core::geo::LON_E7_MAX);
+        assert_eq!(
+            usize::from(SENSOR_TYPE_MAX) + 1,
+            SensorModality::ALL.len(),
+            "SENSOR_TYPE_MAX must track the SensorModality registry"
+        );
+        assert!(SensorModality::from_code(SENSOR_TYPE_MAX).is_some());
+        assert!(SensorModality::from_code(SENSOR_TYPE_MAX + 1).is_none());
     }
 
     #[test]

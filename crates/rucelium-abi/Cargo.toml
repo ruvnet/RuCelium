@@ -9,10 +9,20 @@ repository.workspace = true
 keywords = ["environmental", "ffi", "cbor", "wire", "iot"]
 categories = ["science", "embedded"]
 
+[features]
+# std (default): full surface — domain conversion into rucelium-core and the
+# ed25519 signing module.
+# --no-default-features --features alloc: the no_std surface for Rust-based
+# spore nodes — wire format (parse/encode/validate) + deterministic CBOR
+# (ADR-265 §5).
+default = ["std"]
+std = ["alloc", "dep:rucelium-core", "dep:ed25519-dalek", "dep:sha2"]
+alloc = []
+
 [dependencies]
-rucelium-core = { workspace = true }
-ed25519-dalek = { workspace = true }
-sha2 = { workspace = true }
+rucelium-core = { workspace = true, optional = true }
+ed25519-dalek = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
 
 [lints]
 workspace = true
