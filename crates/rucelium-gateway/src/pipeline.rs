@@ -97,6 +97,8 @@ fn ingest_compact(inner: &mut Inner, datagram: &[u8], received_ns: u64) -> Proce
 /// pipeline: calibration, drift, WorldGraph, durable store, alert rule,
 /// biome admission.
 fn ingest_v1(inner: &mut Inner, envelope: &[u8], received_ns: u64) -> ProcessOutcome {
+    // `ingest` yields a sealed `VerifiedEnvSample`: the only type the biome
+    // layer accepts, and the only one the ingest pipeline can mint.
     let mut sample = match inner.ingest.ingest(envelope, received_ns) {
         Ok(s) => s,
         Err(reason) => return ProcessOutcome::Rejected(reason.to_string()),
@@ -104,29 +106,39 @@ fn ingest_v1(inner: &mut Inner, envelope: &[u8], received_ns: u64) -> ProcessOut
 
     // Calibration: `Uncalibrated` is fine (quality already penalised by the
     // calibrator); a hard error is counted and the sample stays raw — the
-    // gateway never invents a correction (ADR-264 §12 item 6).
-    if inner
-        .calibrator
-        .apply(&inner.calibration, &mut sample, received_ns)
-        .is_err()
-    {
-        inner.calibration_errors += 1;
+    // gateway never invents a correction (ADR-264 §12 item 6). `modify`
+    // applies the correction *through* the seal: the change is committed only
+    // if the transformed sample still validates, so calibration can neither
+    // break the seal nor smuggle an invalid sample past it.
+    let calibrated = sample.modify(|s| inner.calibrator.apply(&inner.calibration, s, received_ns));
+    match calibrated {
+        Ok(Ok(_)) => {}
+        // Either the calibrator rejected the record, or the corrected sample
+        // failed re-validation. Both leave the sample untouched.
+        Ok(Err(_)) | Err(_) => inner.calibration_errors += 1,
     }
+
+    // Read-only view of the sealed sample for everything downstream that
+    // works on plain `EnvSample`s (graph, store, projection, alert rules).
+    let view = sample.sample().clone();
 
     // Drift: the daemon has no co-located anchor model yet, so real traffic
     // feeds residual 0.0 — the call is kept so quarantine state (set by any
     // future anchor feed or by tests) stays visible in /api/stats and no node
     // can silently leave quarantine (sticky by design).
-    let _ = inner.drift.observe(sample.node_id, 0.0);
+    let _ = inner.drift.observe(view.node_id, 0.0);
 
     // WorldGraph registration (idempotent) before storage.
-    inner.graph.register_observation(&sample);
+    inner.graph.register_observation(&view);
 
-    if let Err(e) = inner.obs.append(&sample) {
+    // Storage strips the seal by design: a sample read back from disk is
+    // untrusted bytes again, and re-earning verification requires the
+    // original signed envelope (`IngestPipeline::reverify_stored`).
+    if let Err(e) = inner.obs.append(&view) {
         return ProcessOutcome::Rejected(format!("observation store append: {e}"));
     }
 
-    maybe_alert(inner, &sample, received_ns);
+    maybe_alert(inner, &view, received_ns);
 
     // Biome admission last; duplicates are counted inside the biome.
     let _ = inner.biome.accept(sample);

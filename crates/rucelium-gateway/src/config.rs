@@ -19,6 +19,11 @@ pub const DEFAULT_SIM_INTERVAL_MS: u64 = 1000;
 pub const DEFAULT_RETENTION_CHECK_SECS: u64 = 3600;
 /// Default peer federation poll interval in milliseconds.
 pub const DEFAULT_FEDERATION_POLL_MS: u64 = 30_000;
+/// Default actuator the biome owner exposes to the governed control path.
+pub const DEFAULT_ACTUATOR_ID: &str = "sluice-gate-1";
+/// Default durability mode for the durable stores: the daemon fsyncs every
+/// accepted append, so an accepted record survives power loss.
+pub const DEFAULT_FSYNC: bool = true;
 
 /// Runtime configuration of one gateway daemon instance.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,6 +50,12 @@ pub struct GatewayConfig {
     pub retention_check_secs: u64,
     /// Peer federation poll interval in milliseconds (short in tests).
     pub federation_poll_ms: u64,
+    /// The actuator id the biome owner grants `agent/flood` authority over
+    /// (ADR-264 §6: actuator authority never leaves the biome owner).
+    pub actuator_id: String,
+    /// Durability mode for `ObservationStore` / `EventStore`: `true` fsyncs
+    /// every accepted append before it is acknowledged.
+    pub fsync: bool,
 }
 
 impl Default for GatewayConfig {
@@ -60,6 +71,8 @@ impl Default for GatewayConfig {
             sim_interval_ms: DEFAULT_SIM_INTERVAL_MS,
             retention_check_secs: DEFAULT_RETENTION_CHECK_SECS,
             federation_poll_ms: DEFAULT_FEDERATION_POLL_MS,
+            actuator_id: DEFAULT_ACTUATOR_ID.to_string(),
+            fsync: DEFAULT_FSYNC,
         }
     }
 }
@@ -93,6 +106,8 @@ impl GatewayConfig {
                     config.federation_poll_ms =
                         parse_num(&value("--federation-poll-ms")?, "--federation-poll-ms")?;
                 }
+                "--actuator" => config.actuator_id = value("--actuator")?,
+                "--fsync" => config.fsync = parse_num(&value("--fsync")?, "--fsync")?,
                 unknown => return Err(format!("unknown flag {unknown}")),
             }
         }
@@ -128,6 +143,8 @@ mod tests {
         assert_eq!(c.sim_interval_ms, 1000);
         assert_eq!(c.retention_check_secs, 3600);
         assert_eq!(c.federation_poll_ms, 30_000);
+        assert_eq!(c.actuator_id, "sluice-gate-1");
+        assert!(c.fsync, "the daemon fsyncs accepted appends by default");
     }
 
     #[test]
@@ -151,6 +168,10 @@ mod tests {
             "60",
             "--federation-poll-ms",
             "200",
+            "--actuator",
+            "weir-3",
+            "--fsync",
+            "false",
         ]))
         .unwrap();
         assert_eq!(c.biome_id, "biome/x");
@@ -162,6 +183,8 @@ mod tests {
         assert_eq!(c.sim_interval_ms, 250);
         assert_eq!(c.retention_check_secs, 60);
         assert_eq!(c.federation_poll_ms, 200);
+        assert_eq!(c.actuator_id, "weir-3");
+        assert!(!c.fsync);
     }
 
     #[test]

@@ -12,7 +12,24 @@
 //! HTTP :7465 ──► /health /api/stats /api/observations/recent /api/events
 //!            ──► /api/sensorthings/{Things,Datastreams,Observations}
 //!            ──► /api/federation/{pubkey,summary,revocations,peers}
+//!            ──► /api/admin/{revoke/:node_id,command}
 //! ```
+//!
+//! ## Restart safety (ADR-265)
+//!
+//! Two pieces of security state are durable and restored by
+//! [`GatewayState::open`], because neither is meaningful if it only lasts as
+//! long as the process:
+//!
+//! * **Replay protection** — the ingest anti-replay windows are primed from
+//!   the observation store's durable dedup index
+//!   (`IngestPipeline::prime_from_dedup`), so a signed packet already ingested
+//!   before a restart is still rejected as a replay afterwards, even if
+//!   retention has since deleted the segment holding its payload.
+//! * **Command de-duplication** — the governed control path's command phase
+//!   table is journaled to `commands.jsonl` after every execution attempt and
+//!   restored on startup, so a command id never executes twice across a
+//!   restart (see [`journal`] and [`control`]).
 //!
 //! A background task federates with configured peers (verified signed
 //! summaries and `DeviceRevoked` events only — ADR-264 §6), a retention
@@ -26,15 +43,18 @@
 
 pub mod api;
 pub mod config;
+pub mod control;
 pub mod federation;
+pub mod journal;
 pub mod net;
 pub mod pipeline;
 pub mod simulate;
 pub mod state;
 
 pub use config::GatewayConfig;
+pub use control::run_proposal;
 pub use pipeline::{process_datagram, ProcessOutcome};
-pub use state::{GatewayState, Inner, PeerSummary};
+pub use state::{ControlStats, GatewayState, Inner, PeerSummary};
 
 use rucelium_core::DataClass;
 use std::time::Duration;

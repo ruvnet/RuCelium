@@ -8,14 +8,24 @@
 //! Finer-grained locking is deliberate future work.
 
 use crate::config::GatewayConfig;
-use rucelium_calibration::{CalibrationStore, Calibrator, DriftDetector};
+use crate::journal;
+use rucelium_calibration::{
+    AuthorityRegistry as CalibrationAuthorities, CalibrationAuthority, CalibrationError,
+    CalibrationSigner, CalibrationStore, Calibrator, DriftDetector,
+};
+use rucelium_core::CalibrationRecord;
 use rucelium_federation::{Biome, BiomeConfig, RegionalSummary};
 use rucelium_ingest::IngestPipeline;
+use rucelium_policy::{
+    AuditTrail, AuthorityRegistry, CommandSigner, ExecutionReceipt, GatewayValidator, PolicyConfig,
+    PolicyEngine, SafetyConfig, SafetySimulator,
+};
 use rucelium_store::{EventStore, ObservationStore};
 use rucelium_transport::Reassembler;
 use rucelium_worldgraph::WorldGraph;
 use serde::Serialize;
 use std::collections::BTreeSet;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
@@ -26,6 +36,10 @@ const OBS_SEGMENT_MAX_RECORDS: usize = 4096;
 const EVT_SEGMENT_MAX_RECORDS: usize = 1024;
 /// Max in-flight partially reassembled messages held by the gateway.
 const REASSEMBLER_MAX_PENDING: usize = 256;
+/// Agent identity the biome owner grants actuator authority to at startup.
+pub const GRANTED_AGENT_ID: &str = "agent/flood";
+/// Name of the gateway's own local calibration authority.
+const LOCAL_CALIBRATION_AUTHORITY: &str = "gateway-local";
 
 /// Nanoseconds since the Unix epoch, from the system clock. The library
 /// crates are clock-free; the daemon is where wall time enters the system.
@@ -60,12 +74,29 @@ pub struct PeerSummary {
     pub fetched_ns: u64,
 }
 
+/// Counters for the governed control path (ADR-264 §9).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct ControlStats {
+    /// Commands the gateway validated and executed, producing a receipt.
+    pub commands_executed: u64,
+    /// Proposals stopped at any stage of the governed path.
+    pub proposals_rejected: u64,
+    /// Signed execution receipts retained in memory.
+    pub receipts: u64,
+}
+
 /// Everything mutable in the gateway, guarded by one lock (module docs).
 pub struct Inner {
     /// Wire ingest: registry, signatures, anti-replay (ADR-264 §5).
     pub ingest: IngestPipeline,
-    /// Calibration records with anchor-rooted lineage.
+    /// Calibration records with anchor-rooted lineage, in **strict** mode:
+    /// every record must be signed by a registered calibration authority
+    /// (ADR-264 §12 items 1–3).
     pub calibration: CalibrationStore,
+    /// The gateway's own calibration authority key. The daemon's synthetic
+    /// calibration records are signed with it before insertion; a record it
+    /// did not sign is rejected by the strict store.
+    pub cal_signer: CalibrationSigner,
     /// Applies calibration; never repairs (ADR-264 §12).
     pub calibrator: Calibrator,
     /// EWMA drift monitor with sticky quarantine.
@@ -92,20 +123,109 @@ pub struct Inner {
     pub calibration_errors: u64,
     /// Datagram-level UDP counters.
     pub datagrams: DatagramStats,
+
+    // --- Governed control path (ADR-264 §9). Stage order is enforced by the
+    // policy crate's type privacy; the daemon just owns the components. ---
+    /// Stage 1: deterministic policy evaluation.
+    pub policy: PolicyEngine,
+    /// Stage 2: safety envelope. Budgets are checked here and charged by
+    /// `record_execution` only after the gateway confirms execution.
+    pub safety: SafetySimulator,
+    /// Stage 3: per-biome actuator authority (never leaves the biome owner).
+    pub authority: AuthorityRegistry,
+    /// Stage 4: the biome owner's deterministic command-signing key.
+    pub command_signer: CommandSigner,
+    /// Stages 5–6: gateway validation + two-phase local execution, with the
+    /// command phase table restored from [`Inner::command_journal`].
+    pub gateway: GatewayValidator,
+    /// Append-only audit trail across every control-path stage.
+    pub audit: AuditTrail,
+    /// Signed receipts of executed commands, in execution order.
+    pub receipts: Vec<ExecutionReceipt>,
+    /// Control-path counters.
+    pub control: ControlStats,
+    /// Path of the durable command-phase journal (`commands.jsonl`).
+    pub command_journal: PathBuf,
 }
 
 impl Inner {
     /// Build the full component stack, opening the durable stores under
-    /// `config.data_dir` (`obs/` and `events/` subdirectories).
+    /// `config.data_dir` (`obs/` and `events/` subdirectories) in the
+    /// durability mode `config.fsync` selects.
+    ///
+    /// Two pieces of state are **restored from disk here**, and both are
+    /// security-relevant (ADR-265):
+    ///
+    /// 1. The anti-replay windows are primed from the observation store's
+    ///    durable dedup index ([`ObservationStore::dedup_keys`]). Without
+    ///    this, a restarted gateway would happily re-accept signed packets it
+    ///    had already ingested — replay protection would last only as long as
+    ///    the process.
+    /// 2. The command phase table is restored from the `commands.jsonl`
+    ///    journal, so a command id that was executed (or was mid-execution
+    ///    when the process died) is never executed a second time.
     pub fn open(config: &GatewayConfig) -> Result<Self, String> {
-        let obs = ObservationStore::open(&config.data_dir.join("obs"), OBS_SEGMENT_MAX_RECORDS)
-            .map_err(|e| format!("open observation store: {e}"))?;
-        let events = EventStore::open(&config.data_dir.join("events"), EVT_SEGMENT_MAX_RECORDS)
-            .map_err(|e| format!("open event store: {e}"))?;
+        let obs = ObservationStore::open(
+            &config.data_dir.join("obs"),
+            OBS_SEGMENT_MAX_RECORDS,
+            config.fsync,
+        )
+        .map_err(|e| format!("open observation store: {e}"))?;
+        let events = EventStore::open(
+            &config.data_dir.join("events"),
+            EVT_SEGMENT_MAX_RECORDS,
+            config.fsync,
+        )
+        .map_err(|e| format!("open event store: {e}"))?;
+
+        // (1) Replay protection must survive restart: the durable dedup index
+        // is the replay memory.
+        let mut ingest = IngestPipeline::default();
+        ingest.prime_from_dedup(obs.dedup_keys());
+
+        // Strict calibration: the daemon trusts exactly one authority — its
+        // own deterministic key — and the store verifies every record's
+        // signature against it. `CalibrationStore::new()` (permissive) would
+        // let anyone who can insert a record declare an anchor.
+        let cal_signer = CalibrationSigner::from_seed(&derive_seed(
+            "calibration",
+            &config.biome_id,
+            config.seed,
+        ));
+        let mut authorities = CalibrationAuthorities::new();
+        authorities.add(CalibrationAuthority {
+            name: LOCAL_CALIBRATION_AUTHORITY.to_string(),
+            pubkey_hex: cal_signer.public_hex(),
+            modalities: BTreeSet::new(), // trusted for every modality
+        });
+
+        // Governed control path. The biome owner's command key and the
+        // gateway's receipt identity are both deterministic in
+        // `(biome_id, seed)`, so they are stable across restarts — which is
+        // what lets a replayed command still verify and *then* be rejected as
+        // a duplicate rather than as an untrusted key.
+        let command_signer =
+            CommandSigner::from_seed(&derive_seed("command", &config.biome_id, config.seed));
+        let mut policy_config = PolicyConfig::default();
+        policy_config
+            .allowed_actuators
+            .insert(config.actuator_id.clone());
+        let mut authority = AuthorityRegistry::new();
+        authority.grant(&config.biome_id, GRANTED_AGENT_ID, &config.actuator_id);
+
+        // (2) Restore the journaled command phases.
+        let command_journal = journal::journal_path(&config.data_dir);
+        let mut gateway = GatewayValidator::new(
+            vec![command_signer.public_hex()],
+            &derive_seed("gateway-identity", &config.biome_id, config.seed),
+        );
+        gateway.restore_phases(journal::load(&command_journal)?);
+
         let seed = biome_seed(&config.biome_id, config.seed);
         Ok(Inner {
-            ingest: IngestPipeline::default(),
-            calibration: CalibrationStore::new(),
+            ingest,
+            calibration: CalibrationStore::with_authorities(authorities),
+            cal_signer,
             calibrator: Calibrator::default(),
             drift: DriftDetector::default(),
             graph: WorldGraph::new(),
@@ -119,7 +239,37 @@ impl Inner {
             alerts: 0,
             calibration_errors: 0,
             datagrams: DatagramStats::default(),
+            policy: PolicyEngine::new(policy_config),
+            safety: SafetySimulator::new(SafetyConfig::default()),
+            authority,
+            command_signer,
+            gateway,
+            audit: AuditTrail::new(),
+            receipts: Vec::new(),
+            control: ControlStats::default(),
+            command_journal,
         })
+    }
+
+    /// Sign a calibration record with the gateway's calibration authority key
+    /// and insert it into the strict store.
+    ///
+    /// This is the *only* way records enter the daemon's store: strict mode
+    /// rejects unsigned records, so an attacker who can reach the store still
+    /// cannot mint an "anchor_reference" root.
+    pub fn insert_signed_calibration(
+        &mut self,
+        mut record: CalibrationRecord,
+    ) -> Result<(), CalibrationError> {
+        self.cal_signer.sign_record(&mut record)?;
+        self.calibration.insert(record)
+    }
+
+    /// Persist the gateway validator's command phase table to the journal.
+    /// Called after **every** execution attempt so a crash can never leave a
+    /// command that ran on disk-less state.
+    pub fn journal_command_phases(&self) -> Result<(), String> {
+        journal::store(&self.command_journal, &self.gateway.export_phases())
     }
 }
 
@@ -165,6 +315,26 @@ pub fn biome_seed(biome_id: &str, seed: u64) -> [u8; 32] {
             id[i % id.len()]
         };
         *b = idb ^ sb[i % 8] ^ (i as u8).wrapping_mul(0x9E);
+    }
+    out
+}
+
+/// Derive a **domain-separated** 32-byte seed from the biome identity and the
+/// numeric config seed, so the biome key, the command-signing key, the
+/// gateway's receipt identity, and the calibration authority key are all
+/// distinct while each stays deterministic and restart-stable.
+///
+/// Carries the same v0.1 caveat as [`biome_seed`]: this is **not** a
+/// cryptographic KDF. It exists so a given `(domain, biome_id, seed)` always
+/// yields the same identity; production provisions these from a real ceremony.
+#[must_use]
+pub fn derive_seed(domain: &str, biome_id: &str, seed: u64) -> [u8; 32] {
+    let base = biome_seed(biome_id, seed);
+    let d = domain.as_bytes();
+    let mut out = [0u8; 32];
+    for (i, b) in out.iter_mut().enumerate() {
+        let db = if d.is_empty() { 0x5E } else { d[i % d.len()] };
+        *b = base[i] ^ db ^ (i as u8).wrapping_mul(0x1B);
     }
     out
 }
@@ -226,6 +396,60 @@ mod tests {
         let b = Inner::open(&config).unwrap();
         assert_eq!(a.biome.public_key_hex(), b.biome.public_key_hex());
         std::fs::remove_dir_all(&config.data_dir).ok();
+    }
+
+    #[test]
+    fn derived_seeds_are_domain_separated_and_stable() {
+        let a = derive_seed("command", "biome/a", 1);
+        assert_eq!(a, derive_seed("command", "biome/a", 1));
+        assert_ne!(a, derive_seed("gateway-identity", "biome/a", 1));
+        assert_ne!(a, derive_seed("calibration", "biome/a", 1));
+        assert_ne!(a, derive_seed("command", "biome/b", 1));
+        assert_ne!(a, derive_seed("command", "biome/a", 2));
+        assert_ne!(a, biome_seed("biome/a", 1));
+        // Degenerate domain still produces a stable, non-zero seed.
+        let empty = derive_seed("", "biome/a", 1);
+        assert_eq!(empty, derive_seed("", "biome/a", 1));
+        assert!(empty.iter().any(|&b| b != 0));
+    }
+
+    #[test]
+    fn strict_calibration_rejects_records_the_gateway_did_not_sign() {
+        use rucelium_core::SensorModality;
+        let mut inner = testutil::test_inner("strict-cal");
+        let record = |id: u32| rucelium_core::CalibrationRecord {
+            calibration_id: id,
+            node_id: 0,
+            modality: SensorModality::Weather,
+            method: "anchor_reference".into(),
+            reference_station: Some("anchor/weather".into()),
+            parent_id: None,
+            created_ns: 1_000,
+            expires_ns: u64::MAX / 2,
+            scale_q16: 65_536,
+            offset_q16: 0,
+            uncertainty_q16: 6_554,
+            data_hash: "sha256:anchor".into(),
+            signature_hex: None,
+            signer_pubkey_hex: None,
+        };
+        // Unsigned insertion is refused outright...
+        assert!(matches!(
+            inner.calibration.insert(record(1)),
+            Err(CalibrationError::MissingSignature(1))
+        ));
+        // ...a record signed by a key the registry does not know is refused...
+        let mut foreign = record(2);
+        CalibrationSigner::from_seed(b"some-other-calibration-lab-key!!")
+            .sign_record(&mut foreign)
+            .unwrap();
+        assert!(matches!(
+            inner.calibration.insert(foreign),
+            Err(CalibrationError::UntrustedSigner { id: 2, .. })
+        ));
+        // ...and only the gateway's own authority gets in.
+        inner.insert_signed_calibration(record(3)).unwrap();
+        assert_eq!(inner.calibration.verify_lineage(3).unwrap(), vec![3]);
     }
 
     #[test]

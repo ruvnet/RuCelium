@@ -5,11 +5,18 @@
 //! # SECURITY (v0.1)
 //!
 //! **The admin endpoints carry NO authentication.** `POST
-//! /api/admin/revoke/{node_id}` revokes a device key immediately. Any
-//! deployment beyond a workbench MUST bind the HTTP port to localhost or
-//! firewall it; production authentication is deliberate follow-up work
-//! (ADR-265 §6).
+//! /api/admin/revoke/{node_id}` revokes a device key immediately, and `POST
+//! /api/admin/command` drives the governed control path. Any deployment
+//! beyond a workbench MUST bind the HTTP port to localhost or firewall it;
+//! production authentication is deliberate follow-up work (ADR-265 §6).
+//!
+//! Note what "unauthenticated" does *not* buy an attacker on the command
+//! endpoint: the request is a **proposal**, not a command. It still has to
+//! clear deterministic policy, the safety envelope, the biome owner's
+//! actuator authority grant, ed25519 command signing, gateway validation, and
+//! the durable duplicate-command journal before anything executes.
 
+use crate::control::{actuator_proposal, run_proposal};
 use crate::state::{now_ns, GatewayState};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -17,6 +24,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use rucelium_core::EventKind;
 use rucelium_federation::{project_sample, SensorThingsBundle};
+use rucelium_policy::ControlError;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
@@ -66,6 +74,7 @@ pub fn router(state: GatewayState) -> Router {
         .route("/api/federation/revocations", get(fed_revocations))
         .route("/api/federation/peers", get(fed_peers))
         .route("/api/admin/revoke/:node_id", post(admin_revoke))
+        .route("/api/admin/command", post(admin_command))
         .with_state(state)
 }
 
@@ -96,6 +105,7 @@ async fn stats(State(state): State<GatewayState>) -> Json<Value> {
             "contradictions": inner.graph.contradiction_count(),
         },
         "alerts": inner.alerts,
+        "control": inner.control,
         "calibration_errors": inner.calibration_errors,
         "quarantined_nodes": inner.drift.quarantined(),
         "applied_peer_revocations": inner.applied_peer_revocations,
@@ -249,4 +259,80 @@ async fn admin_revoke(
         "registry_revoked": registry_revoked,
         "event": event,
     })))
+}
+
+/// Request body of `POST /api/admin/command`.
+#[derive(Debug, Deserialize)]
+struct CommandRequest {
+    /// Proposal id; the resulting command id is `"cmd-{proposal_id}"`.
+    proposal_id: String,
+    /// Proposing agent identity (must hold the biome owner's grant).
+    agent_id: String,
+    /// Target actuator (must be in the configured allowed set).
+    actuator_id: String,
+    /// Action verb, e.g. `"open_fraction"`.
+    action: String,
+    /// Actuator magnitude; policy and safety both bound it.
+    magnitude: f64,
+}
+
+/// `POST /api/admin/command` — run a proposal through the **whole** governed
+/// control path (ADR-264 §9): policy → safety → authority → sign → gateway
+/// validate → execute → signed receipt.
+///
+/// `200` carries the gateway-signed [`rucelium_policy::ExecutionReceipt`];
+/// anything stopped along the way returns a non-2xx with a JSON error body
+/// (`409 Conflict` for a duplicate command id — including one restored from
+/// the durable journal after a restart — and `422` for every other refusal).
+/// A refused proposal never produces a receipt.
+///
+/// **UNAUTHENTICATED in v0.1** — see the module-level SECURITY note.
+async fn admin_command(
+    State(state): State<GatewayState>,
+    Json(req): Json<CommandRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let mut inner = state.inner.lock().await;
+    let now = now_ns();
+    let proposal = actuator_proposal(
+        &state.biome_id,
+        &req.proposal_id,
+        &req.agent_id,
+        &req.actuator_id,
+        &req.action,
+        req.magnitude,
+        now,
+    );
+    match run_proposal(&mut inner, proposal, now) {
+        Ok(receipt) => Ok(Json(json!({ "ok": true, "receipt": receipt }))),
+        Err(e) => {
+            let status = if matches!(e, ControlError::DuplicateCommand(_)) {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::UNPROCESSABLE_ENTITY
+            };
+            Err((
+                status,
+                Json(json!({
+                    "ok": false,
+                    "error": e.to_string(),
+                    "stage": control_stage(&e),
+                })),
+            ))
+        }
+    }
+}
+
+/// Which gate stopped a proposal, as a stable machine-readable string.
+fn control_stage(e: &ControlError) -> &'static str {
+    match e {
+        ControlError::PolicyViolation(_) => "policy",
+        ControlError::Unsafe(_) => "safety",
+        ControlError::NotAuthorized { .. } => "authority",
+        ControlError::UntrustedKey(_) | ControlError::BadSignature | ControlError::BadEncoding(_) => {
+            "gateway_signature"
+        }
+        ControlError::Expired { .. } => "gateway_freshness",
+        ControlError::DuplicateCommand(_) => "gateway_duplicate",
+        ControlError::ExecutionFailed(_) => "execution",
+    }
 }
