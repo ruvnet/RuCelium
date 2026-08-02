@@ -365,7 +365,7 @@ fn watershed_event(
         evidence,
         confidence,
         message,
-    signature_hex: None,
+        signature_hex: None,
         signer_pubkey_hex: None,
     };
     event.validate().expect("scenario events are well-formed");
@@ -556,10 +556,16 @@ fn main() {
             format!("{} / node {:#018x}", node.modality.as_str(), node.node_id),
         );
     }
-    line("  [11] rf-gw-01 (RuView context)", "wifi_csi / not a spore node");
+    line(
+        "  [11] rf-gw-01 (RuView context)",
+        "wifi_csi / not a spore node",
+    );
     println!();
     line("envelopes signed, verified, accepted", run.accepted);
-    line("simulated span", format!("{} h", STEPS as u64 * STEP_S / 3600));
+    line(
+        "simulated span",
+        format!("{} h", STEPS as u64 * STEP_S / 3600),
+    );
 
     println!("\n  1. Lead time over the conventional gauge");
     let alert = run.alert.as_ref().expect("the storm raises a flood alert");
@@ -582,22 +588,31 @@ fn main() {
             run.lead_time_min().expect("alert precedes the gauge")
         ),
     );
-    line("alert severity / confidence", format!("{:?} / {:.2}", alert.severity, alert.confidence));
+    line(
+        "alert severity / confidence",
+        format!("{:?} / {:.2}", alert.severity, alert.confidence),
+    );
     line("alert message", &alert.message);
 
     println!("\n  2. Blocked-culvert inference (no gauge crosses a threshold)");
     let culvert = run.culvert.as_ref().expect("the blockage is inferred");
-    line("event kind / severity", format!("{:?} / {:?}", culvert.kind, culvert.severity));
-    line("detected at", format!("T+{} min", (culvert.detected_ns - EPOCH_NS) / NS_PER_S / 60));
+    line(
+        "event kind / severity",
+        format!("{:?} / {:?}", culvert.kind, culvert.severity),
+    );
+    line(
+        "detected at",
+        format!("T+{} min", (culvert.detected_ns - EPOCH_NS) / NS_PER_S / 60),
+    );
     line("evidence nodes", culvert.evidence.len());
     line("message", &culvert.message);
 
     println!("\n  3. Storm-displaced sensor");
-    let displaced = run
-        .displacement
-        .as_ref()
-        .expect("the storm displaces SM-3");
-    line("event kind / severity", format!("{:?} / {:?}", displaced.kind, displaced.severity));
+    let displaced = run.displacement.as_ref().expect("the storm displaces SM-3");
+    line(
+        "event kind / severity",
+        format!("{:?} / {:?}", displaced.kind, displaced.severity),
+    );
     line(
         "quarantined node ids",
         run.quarantined

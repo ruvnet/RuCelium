@@ -30,7 +30,7 @@ use rucelium_ingest::{DeviceRegistry, IngestPipeline, RejectReason};
 use rucelium_policy::verify_receipt;
 use rucelium_store::{AppendOutcome, ObservationStore, StoreError};
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::net::UdpSocket;
 
@@ -109,12 +109,12 @@ fn stored_sample(ingest: &mut IngestPipeline, sequence: u32, measured_ns: u64) -
 
 /// The gateway config for a restart test: ephemeral ports, a fixed data dir,
 /// fsync on so an accepted append really is durable.
-fn config(dir: &PathBuf) -> GatewayConfig {
+fn config(dir: &Path) -> GatewayConfig {
     GatewayConfig {
         biome_id: "biome/restart".into(),
         udp_port: 0,
         http_port: 0,
-        data_dir: dir.clone(),
+        data_dir: dir.to_path_buf(),
         fsync: true,
         ..GatewayConfig::default()
     }
@@ -124,16 +124,14 @@ fn config(dir: &PathBuf) -> GatewayConfig {
 /// race the registration. The device registry is in-memory provisioning
 /// state, so it is re-supplied on each boot — unlike the replay and command
 /// state, which must come off disk.
-async fn boot(dir: &PathBuf) -> rucelium_gateway::GatewayHandle {
+async fn boot(dir: &Path) -> rucelium_gateway::GatewayHandle {
     let cfg = config(dir);
     let state = GatewayState::open(&cfg).expect("open gateway state");
-    state
-        .inner
-        .lock()
-        .await
-        .ingest
-        .registry_mut()
-        .register(NODE, signer().public_key(), FW.to_string());
+    state.inner.lock().await.ingest.registry_mut().register(
+        NODE,
+        signer().public_key(),
+        FW.to_string(),
+    );
     spawn_gateway_with_state(state, cfg)
         .await
         .expect("spawn gateway")
@@ -361,7 +359,11 @@ fn retention_deleted_records_are_still_replay_protected_after_restart() {
 
     // --- Restart: reopen the store and prime a brand-new pipeline. ---
     let reopened = ObservationStore::open(&obs_dir, 1, true).expect("reopen store");
-    assert_eq!(reopened.len(), 1, "payload stayed deleted across the restart");
+    assert_eq!(
+        reopened.len(),
+        1,
+        "payload stayed deleted across the restart"
+    );
     assert!(
         reopened.dedup_keys().contains(&(NODE, 1)),
         "the dedup key outlives the segment that held its payload"
@@ -588,7 +590,10 @@ fn a_corrupted_complete_record_is_an_integrity_error_not_truncation() {
         first_line.contains("air_temperature"),
         "expected the observed property in the record"
     );
-    let tampered = format!("{}{rest}", first_line.replace("air_temperature", "air_temperaturx"));
+    let tampered = format!(
+        "{}{rest}",
+        first_line.replace("air_temperature", "air_temperaturx")
+    );
     assert_eq!(
         tampered.len(),
         text.len(),

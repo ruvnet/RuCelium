@@ -401,7 +401,8 @@ pub fn run() -> Report {
             let ns = slot_ns(day, slot);
             let temp = air_temp_c(day, slot, &mut rng);
             let env = nodes[2 * n_trees].emit(temp, ns, 1);
-            gw.ingest(&env, ns + 1_000_000).expect("mast sample verifies");
+            gw.ingest(&env, ns + 1_000_000)
+                .expect("mast sample verifies");
             verified += 1;
             for (i, t) in trees.iter().enumerate() {
                 let mv = t.base_mv + t.temp_beta * (temp - 14.0) + rng.noise(t.sd_mv);
@@ -464,10 +465,12 @@ pub fn run() -> Report {
             let ns = slot_ns(day, slot);
             let temp = air_temp_c(day, slot, &mut rng);
             let env = nodes[2 * n_trees].emit(temp, ns, 1);
-            gw.ingest(&env, ns + 1_000_000).expect("mast sample verifies");
+            gw.ingest(&env, ns + 1_000_000)
+                .expect("mast sample verifies");
             verified += 1;
             let progress = drought_progress(day);
-            let evaluating = slot == AFTERNOON_SLOT && (day == CONFOUNDER_DAY || day == DROUGHT_DAY);
+            let evaluating =
+                slot == AFTERNOON_SLOT && (day == CONFOUNDER_DAY || day == DROUGHT_DAY);
             let mut row = Vec::new();
             for (i, t) in trees.iter().enumerate() {
                 let stress = if t.droughted {
@@ -591,7 +594,10 @@ pub fn run() -> Report {
                 "ecosystem/mixed-stand",
                 EdgeKind::Supports,
                 weight,
-                format!("bioelectric drought deviation z={:.1} (capped evidence)", v.adj_z),
+                format!(
+                    "bioelectric drought deviation z={:.1} (capped evidence)",
+                    v.adj_z
+                ),
             )
             .expect("both endpoints registered");
         max_bio_edge_weight = max_bio_edge_weight.max(weight);
@@ -680,7 +686,10 @@ fn main() {
         .iter()
         .map(|b| b.mean_mv)
         .fold(f64::NEG_INFINITY, f64::max);
-    line("baseline mean spread across organisms", format!("{:.1} mV", hi - lo));
+    line(
+        "baseline mean spread across organisms",
+        format!("{:.1} mV", hi - lo),
+    );
     println!(
         "  -> no global threshold is defensible: the healthiest tree rests {:.0} mV",
         hi - lo
@@ -688,7 +697,10 @@ fn main() {
     println!("     away from its neighbour before anything is wrong.");
 
     println!("\n  2. CONFOUNDER ONLY — hot afternoon, every tree healthy\n");
-    line("air temperature at evaluation", format!("{:.1} °C", r.confounder_temp_c));
+    line(
+        "air temperature at evaluation",
+        format!("{:.1} °C", r.confounder_temp_c),
+    );
     println!(
         "  {:<14} {:>10} {:>9} {:>9} {:>9} {:>10}",
         "tree", "mV", "raw z", "adj z", "soil %", "verdict"
@@ -705,14 +717,21 @@ fn main() {
         );
     }
     let naive_fp = r.confounder_only.iter().filter(|v| v.naive_fired).count();
-    let adj_fp = r.confounder_only.iter().filter(|v| v.adjusted_fired).count();
+    let adj_fp = r
+        .confounder_only
+        .iter()
+        .filter(|v| v.adjusted_fired)
+        .count();
     line("naive detector false positives", format!("{naive_fp} of 6"));
     line("covariate-adjusted detections", format!("{adj_fp} of 6"));
     println!("  -> temperature alone mimics the signal of interest on EVERY tree.");
     println!("     ADR-266 §4.1 item 1 is not a footnote; it is the dominant failure mode.");
 
     println!("\n  3. DROUGHT DAY — heatwave still present, 2 trees genuinely stressed\n");
-    line("air temperature at evaluation", format!("{:.1} °C", r.drought_temp_c));
+    line(
+        "air temperature at evaluation",
+        format!("{:.1} °C", r.drought_temp_c),
+    );
     println!(
         "  {:<14} {:>10} {:>9} {:>9} {:>9} {:>10} {:>8}",
         "tree", "mV", "raw z", "adj z", "soil %", "verdict", "truth"
@@ -737,17 +756,35 @@ fn main() {
     println!("\n  4. THE CAP — biology may inform, never alarm\n");
     if let Some(ev) = &r.event {
         ev.validate().expect("event is structurally valid");
-        line("detector wanted severity", format!("{:?}", r.uncapped_severity));
-        line("bio_only_severity_cap() emitted", format!("{:?}", ev.severity));
-        line("event kind / modality", format!("{:?} / {}", ev.kind, ev.modality.as_str()));
+        line(
+            "detector wanted severity",
+            format!("{:?}", r.uncapped_severity),
+        );
+        line(
+            "bio_only_severity_cap() emitted",
+            format!("{:?}", ev.severity),
+        );
+        line(
+            "event kind / modality",
+            format!("{:?} / {}", ev.kind, ev.modality.as_str()),
+        );
         line("evidence observations", ev.evidence.len());
-        line("confidence, bioelectric only", format!("{:.2}", r.confidence_bio_only));
+        line(
+            "confidence, bioelectric only",
+            format!("{:.2}", r.confidence_bio_only),
+        );
         line(
             "confidence, soil probe agreeing",
             format!("{:.2}  (severity UNCHANGED)", r.confidence_corroborated),
         );
-        line("max biology evidence edge weight", format!("{:.2}", r.max_bio_edge_weight));
-        line("hard cap on that weight", format!("{BIO_MAX_EVIDENCE_WEIGHT:.2}"));
+        line(
+            "max biology evidence edge weight",
+            format!("{:.2}", r.max_bio_edge_weight),
+        );
+        line(
+            "hard cap on that weight",
+            format!("{BIO_MAX_EVIDENCE_WEIGHT:.2}"),
+        );
         println!("  -> the conventional soil probe raised CONFIDENCE. It did not, and could");
         println!("     not, raise SEVERITY: this event's evidence is bioelectric.");
     }
@@ -825,7 +862,13 @@ mod tests {
             "the heatwave must be a genuine confounder for all six trees"
         );
         // Covariate-adjusted detector: nothing fires, no event exists.
-        assert_eq!(r.confounder_only.iter().filter(|v| v.adjusted_fired).count(), 0);
+        assert_eq!(
+            r.confounder_only
+                .iter()
+                .filter(|v| v.adjusted_fired)
+                .count(),
+            0
+        );
         for v in &r.confounder_only {
             assert!(!v.soil_corroborates, "{} soil should look normal", v.label);
         }
@@ -834,10 +877,16 @@ mod tests {
     #[test]
     fn bioelectric_only_evidence_is_capped_at_advisory() {
         // The cap function itself, over the whole ladder.
-        assert_eq!(bio_only_severity_cap(Severity::Critical), Severity::Advisory);
+        assert_eq!(
+            bio_only_severity_cap(Severity::Critical),
+            Severity::Advisory
+        );
         assert_eq!(bio_only_severity_cap(Severity::Warning), Severity::Advisory);
         assert_eq!(bio_only_severity_cap(Severity::Watch), Severity::Advisory);
-        assert_eq!(bio_only_severity_cap(Severity::Advisory), Severity::Advisory);
+        assert_eq!(
+            bio_only_severity_cap(Severity::Advisory),
+            Severity::Advisory
+        );
 
         let r = run();
         let ev = r.event.as_ref().expect("drought event was raised");

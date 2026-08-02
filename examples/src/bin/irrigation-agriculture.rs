@@ -456,7 +456,10 @@ fn main() {
             ),
         );
     }
-    line("irrigation trigger", format!("stress > {STRESS_TRIGGER:.2}"));
+    line(
+        "irrigation trigger",
+        format!("stress > {STRESS_TRIGGER:.2}"),
+    );
     line(
         "policy ceiling / safety envelope",
         format!("{POLICY_MAX_MAGNITUDE:.2} / {SAFE_MAGNITUDE:.2}"),
@@ -545,7 +548,10 @@ fn main() {
         );
     }
     let zone_a_stages = run.stages_for("irr-zone-a-001");
-    line("zone A stages (completed path)", format!("{:?}", &zone_a_stages[..7]));
+    line(
+        "zone A stages (completed path)",
+        format!("{:?}", &zone_a_stages[..7]),
+    );
     line(
         "zone A stages (after the replay attempt)",
         format!("{:?}", &zone_a_stages[7..]),
@@ -578,7 +584,10 @@ mod tests {
         ] {
             let mut tampered = receipt.clone();
             mutate(&mut tampered);
-            assert!(!verify_receipt(&tampered), "tampered receipt must not verify");
+            assert!(
+                !verify_receipt(&tampered),
+                "tampered receipt must not verify"
+            );
         }
         assert_eq!(run.zone_a_executions, 1);
     }
@@ -609,7 +618,12 @@ mod tests {
         let stages = run.stages_for("irr-zone-a-002");
         assert_eq!(
             stages,
-            vec!["proposed", "policy_evaluated", "safety_simulated", "authorized"]
+            vec![
+                "proposed",
+                "policy_evaluated",
+                "safety_simulated",
+                "authorized"
+            ]
         );
     }
 

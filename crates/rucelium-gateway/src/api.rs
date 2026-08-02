@@ -328,9 +328,9 @@ fn control_stage(e: &ControlError) -> &'static str {
         ControlError::PolicyViolation(_) => "policy",
         ControlError::Unsafe(_) => "safety",
         ControlError::NotAuthorized { .. } => "authority",
-        ControlError::UntrustedKey(_) | ControlError::BadSignature | ControlError::BadEncoding(_) => {
-            "gateway_signature"
-        }
+        ControlError::UntrustedKey(_)
+        | ControlError::BadSignature
+        | ControlError::BadEncoding(_) => "gateway_signature",
         ControlError::Expired { .. } => "gateway_freshness",
         ControlError::DuplicateCommand(_) => "gateway_duplicate",
         ControlError::ExecutionFailed(_) => "execution",

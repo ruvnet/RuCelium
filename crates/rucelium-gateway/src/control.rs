@@ -22,9 +22,7 @@
 //!    budget is spent by execution, not by proposing.
 
 use crate::state::Inner;
-use rucelium_policy::{
-    AgentProposal, ControlError, ExecutionReceipt, ProposalKind, SignedCommand,
-};
+use rucelium_policy::{AgentProposal, ControlError, ExecutionReceipt, ProposalKind, SignedCommand};
 
 /// How long a signed command stays valid (1 hour) — long enough for a slow
 /// local link, short enough that a captured command is not replayable forever.
@@ -170,8 +168,14 @@ mod tests {
         let receipt = run_proposal(&mut inner, p, NOW).expect("authorized command executes");
 
         assert_eq!(receipt.command_id, "cmd-42");
-        assert!(verify_receipt(&receipt), "receipts are gateway attestations");
-        assert_eq!(receipt.gateway_pubkey_hex, inner.gateway.gateway_pubkey_hex());
+        assert!(
+            verify_receipt(&receipt),
+            "receipts are gateway attestations"
+        );
+        assert_eq!(
+            receipt.gateway_pubkey_hex,
+            inner.gateway.gateway_pubkey_hex()
+        );
         assert_eq!(inner.control.commands_executed, 1);
         assert_eq!(inner.control.receipts, 1);
 

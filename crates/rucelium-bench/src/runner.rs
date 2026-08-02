@@ -439,8 +439,8 @@ pub fn run(config: SimConfig) -> BiomeReport {
                 // Read access to the sealed sample; the seal never leaves the
                 // wrapper, so nothing downstream can fabricate one.
                 let view = sample.sample();
-                let is_local_anomaly = view.modality == SensorModality::WaterQuality
-                    && view.value > FLOOD_THRESHOLD_M;
+                let is_local_anomaly =
+                    view.modality == SensorModality::WaterQuality && view.value > FLOOD_THRESHOLD_M;
                 if !is_local_anomaly {
                     let t_s = (view.measured_ns - EPOCH_START_NS) / NS_PER_S;
                     let expected = anchor_expectation(view.modality, em.node_index, t_s);

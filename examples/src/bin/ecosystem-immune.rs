@@ -31,9 +31,7 @@
 use rucelium_core::{
     EnvironmentalEvent, EventKind, EvidenceRef, GeoPoint, SensorModality, Severity, SPEC_VERSION,
 };
-use rucelium_examples::{
-    banner, line, synthetic_footer, Gateway, Node, Rng, EPOCH_NS, NS_PER_S,
-};
+use rucelium_examples::{banner, line, synthetic_footer, Gateway, Node, Rng, EPOCH_NS, NS_PER_S};
 use rucelium_policy::{
     verify_receipt, AgentProposal, AuditTrail, AuthorityRegistry, CommandSigner, ControlError,
     ExecutionReceipt, GatewayValidator, PolicyConfig, PolicyEngine, ProposalKind, SafetyConfig,
@@ -393,8 +391,8 @@ pub fn govern(agent_id: &str, granted: bool, now_ns: u64) -> GovernanceOutcome {
         authority.grant("biome/reach-b", agent_id, ISOLATION_GATE);
     }
     let signer = CommandSigner::from_seed(SIGNER_SEED);
-    let mut gateway =
-        GatewayValidator::new(vec![signer.public_hex()], GATEWAY_SEED).with_max_commands_per_actuator(2);
+    let mut gateway = GatewayValidator::new(vec![signer.public_hex()], GATEWAY_SEED)
+        .with_max_commands_per_actuator(2);
 
     let finish = |stopped_at: &str,
                   error: Option<ControlError>,
@@ -514,7 +512,8 @@ pub fn run() -> Report {
         let mut row: Vec<PointState> = Vec::new();
         for (i, p) in points.iter().enumerate() {
             let intensity = slug_intensity(step, p.slug_step);
-            let current = p.base_ua + p.temp_coeff * (temp - 15.0)
+            let current = p.base_ua
+                + p.temp_coeff * (temp - 15.0)
                 + TOXIC_CURRENT_DROP_UA * intensity
                 + rng.noise(p.sd_ua);
             let env = nodes[i].emit(current, ns, 1);
@@ -772,9 +771,15 @@ fn main() {
         let naive = a.points.iter().filter(|p| p.naive_fired).count();
         let bio = a.points.iter().filter(|p| p.biofilm_fired).count();
         let chem = a.points.iter().filter(|p| p.chemical_fired).count();
-        line("naive / compensated / chemical detections", format!("{naive} / {bio} / {chem}"));
+        line(
+            "naive / compensated / chemical detections",
+            format!("{naive} / {bio} / {chem}"),
+        );
         line("evidence is biology only", a.bio_only);
-        line("severity before the biological cap", format!("{:?}", a.uncapped));
+        line(
+            "severity before the biological cap",
+            format!("{:?}", a.uncapped),
+        );
         line("severity emitted", format!("{:?}", a.severity));
         line(
             "source localized (most upstream responder)",
@@ -785,7 +790,11 @@ fn main() {
             line("event confidence", format!("{:.2}", ev.confidence));
         }
     }
-    println!("  -> the biofilm responded {} steps ({} min) before the chemical probe.", r.lead_steps, r.lead_steps as u64 * STEP_S / 60);
+    println!(
+        "  -> the biofilm responded {} steps ({} min) before the chemical probe.",
+        r.lead_steps,
+        r.lead_steps as u64 * STEP_S / 60
+    );
     println!("     Until corroborated, the fabric refused to say more than Advisory.");
 
     println!("\n  GOVERNED INTERVENTION — the agent proposes, policy decides\n");
@@ -807,8 +816,14 @@ fn main() {
         }
         println!();
     }
-    line("max biofilm evidence edge weight", format!("{:.2}", r.max_bio_edge_weight));
-    line("hard cap on that weight", format!("{BIO_MAX_EVIDENCE_WEIGHT:.2}"));
+    line(
+        "max biofilm evidence edge weight",
+        format!("{:.2}", r.max_bio_edge_weight),
+    );
+    line(
+        "hard cap on that weight",
+        format!("{BIO_MAX_EVIDENCE_WEIGHT:.2}"),
+    );
     line("envelopes cryptographically verified", r.verified_samples);
     line("WorldGraph JSON bytes (deterministic)", r.graph_json.len());
 
@@ -822,7 +837,10 @@ mod tests {
 
     #[test]
     fn biofilm_only_evidence_is_capped_at_advisory() {
-        assert_eq!(bio_only_severity_cap(Severity::Critical), Severity::Advisory);
+        assert_eq!(
+            bio_only_severity_cap(Severity::Critical),
+            Severity::Advisory
+        );
         assert_eq!(bio_only_severity_cap(Severity::Warning), Severity::Advisory);
         assert_eq!(bio_only_severity_cap(Severity::Watch), Severity::Advisory);
 
