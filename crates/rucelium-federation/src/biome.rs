@@ -1,6 +1,15 @@
 //! `Biome` — the sovereign regional aggregate (ADR-264 §6, §12): verified-only
 //! ingest with global dedup, device revocation as signed events, and
 //! policy-driven disclosure (delay + coordinate coarsening).
+//!
+//! Admission is **sealed at the type level**: [`Biome::accept`] takes a
+//! [`VerifiedEnvSample`], which is not serializable and has no public
+//! constructor — the only producers are
+//! `rucelium_ingest::IngestPipeline::ingest` and
+//! `rucelium_ingest::IngestPipeline::reverify_stored`, both of which run the
+//! full registry + signature verification. A `serde`-deserialized
+//! [`rucelium_core::EnvSample`] whose bytes claim `provenance.verified =
+//! true` cannot reach `accept` at all: the call does not type-check.
 
 use crate::sig;
 use ed25519_dalek::{Signature, Signer as _, SigningKey};
@@ -8,6 +17,7 @@ use rucelium_core::{
     DataClass, EnvSample, EnvironmentalEvent, EventKind, EvidenceRef, GeoPoint, SensorModality,
     Severity, SPEC_VERSION,
 };
+use rucelium_ingest::VerifiedEnvSample;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -71,6 +81,12 @@ impl BiomeConfig {
 }
 
 /// Outcome of [`Biome::accept`] for one sample.
+///
+/// There is deliberately **no `Unverified` variant**: `accept` takes a
+/// [`VerifiedEnvSample`], which can only be produced by the ingest
+/// pipeline's full cryptographic verification — an unverified sample is
+/// unrepresentable at this API, so the outcome cannot occur (ADR-264 §12,
+/// enforced by the type system instead of a runtime boolean).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AcceptOutcome {
@@ -78,9 +94,6 @@ pub enum AcceptOutcome {
     Accepted,
     /// The `(node_id, sequence)` key was already accepted (live or replay).
     Duplicate,
-    /// The gateway never verified the wire signature — unverified data is
-    /// never admitted (ADR-264 §12).
-    Unverified,
     /// The producing device has been revoked.
     Revoked,
 }
@@ -136,16 +149,33 @@ impl Biome {
         &self.key
     }
 
-    /// Admit one sample. Revoked devices are blocked, unverified samples are
-    /// never admitted (ADR-264 §12), and the global dedup index rejects any
-    /// `(node_id, sequence)` key already accepted — whether it arrived live
-    /// or via [`crate::OutageBuffer`] replay after an outage.
-    pub fn accept(&mut self, sample: EnvSample) -> AcceptOutcome {
+    /// Admit one cryptographically verified sample. Revoked devices are
+    /// blocked, and the global dedup index rejects any `(node_id, sequence)`
+    /// key already accepted — whether it arrived live or via
+    /// [`crate::OutageBuffer`] replay (re-verified through
+    /// `IngestPipeline::reverify_stored`) after an outage.
+    ///
+    /// Unverified data is unrepresentable here (ADR-264 §12): the parameter
+    /// type [`VerifiedEnvSample`] has no public constructor and is not
+    /// deserializable, so only the ingest pipeline's full registry +
+    /// signature checks can mint one. Passing a bare
+    /// [`rucelium_core::EnvSample`] — however its `provenance.verified` flag
+    /// is set — does not compile:
+    ///
+    /// ```compile_fail
+    /// use rucelium_federation::Biome;
+    ///
+    /// fn smuggle(biome: &mut Biome, forged: rucelium_core::EnvSample) {
+    ///     // ERROR: expected `VerifiedEnvSample`, found `EnvSample` — a
+    ///     // deserialized sample claiming `provenance.verified = true`
+    ///     // cannot impersonate a sealed one.
+    ///     biome.accept(forged);
+    /// }
+    /// ```
+    pub fn accept(&mut self, sample: VerifiedEnvSample) -> AcceptOutcome {
+        let sample = sample.into_inner();
         if self.revoked.contains_key(&sample.node_id) {
             return AcceptOutcome::Revoked;
-        }
-        if !sample.provenance.verified {
-            return AcceptOutcome::Unverified;
         }
         if !self.seen.insert(sample.dedup_key()) {
             self.duplicate_count += 1;
@@ -298,7 +328,7 @@ pub fn verify_event(event: &EnvironmentalEvent) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testutil::{sample, SEED};
+    use crate::testutil::{pipeline, sample, signed_envelope, verified_sample, SEED};
     use crate::OutageBuffer;
 
     fn biome() -> Biome {
@@ -323,30 +353,58 @@ mod tests {
         assert!(!c.disclosure.open_access);
     }
 
+    /// The only way to reach `accept` is through the ingest pipeline's full
+    /// cryptographic verification — `VerifiedEnvSample` is not
+    /// deserializable and has no public constructor, so a
+    /// `serde_json`-deserialized `EnvSample` with `provenance.verified =
+    /// true` cannot be passed in (see the `compile_fail` doctest on
+    /// [`Biome::accept`]). This test exercises the one honest path.
     #[test]
-    fn unverified_samples_are_never_admitted() {
+    fn only_the_ingest_pipeline_can_mint_acceptable_samples() {
+        // A forged serialized sample claiming verified = true deserializes
+        // fine as an EnvSample...
+        let forged = sample(1, 1, 1_000, 20.0);
+        let json = serde_json::to_string(&forged).unwrap();
+        let back: EnvSample = serde_json::from_str(&json).unwrap();
+        assert!(back.provenance.verified);
+        // ...but `Biome::accept(back)` does not compile. The honest path:
+        let mut p = pipeline(&[1]);
         let mut b = biome();
-        let mut s = sample(1, 1, 1_000, 20.0);
-        s.provenance.verified = false;
-        assert_eq!(b.accept(s), AcceptOutcome::Unverified);
-        assert_eq!(b.accepted_count(), 0);
-        assert!(b.observations().is_empty());
+        let sealed = verified_sample(&mut p, 1, 1, 1_000, 20.0);
+        assert!(sealed.sample().provenance.verified);
+        assert_eq!(b.accept(sealed), AcceptOutcome::Accepted);
+        assert_eq!(b.accepted_count(), 1);
     }
 
     #[test]
     fn duplicates_across_live_and_replay_counted_once() {
+        let mut p = pipeline(&[1]);
         let mut b = biome();
         // Live ingest.
-        assert_eq!(b.accept(sample(1, 1, 1_000, 20.0)), AcceptOutcome::Accepted);
-        assert_eq!(b.accept(sample(1, 2, 2_000, 20.5)), AcceptOutcome::Accepted);
+        assert_eq!(
+            b.accept(verified_sample(&mut p, 1, 1, 1_000, 20.0)),
+            AcceptOutcome::Accepted
+        );
+        assert_eq!(
+            b.accept(verified_sample(&mut p, 1, 2, 2_000, 20.5)),
+            AcceptOutcome::Accepted
+        );
 
-        // Outage: the gateway buffered overlapping samples, then replays.
+        // Outage: the gateway buffered overlapping signed envelopes, then
+        // replays them through full re-verification.
         let mut buf = OutageBuffer::new();
-        buf.push(sample(1, 2, 2_000, 20.5)); // already live-ingested
-        buf.push(sample(1, 3, 3_000, 21.0)); // new
+        // Already live-ingested.
+        assert!(buf
+            .push(&signed_envelope(1, 2, 2_000, 20.5), 3_000_000)
+            .unwrap());
+        // New.
+        assert!(buf
+            .push(&signed_envelope(1, 3, 3_000, 21.0), 3_000_000)
+            .unwrap());
         let mut outcomes = Vec::new();
-        for s in buf.drain() {
-            outcomes.push(b.accept(s));
+        for (envelope, received_ns) in buf.drain() {
+            let sealed = p.reverify_stored(&envelope, received_ns).unwrap();
+            outcomes.push(b.accept(sealed));
         }
         assert_eq!(
             outcomes,
@@ -358,9 +416,16 @@ mod tests {
 
     #[test]
     fn revoked_device_blocked_while_healthy_device_flows() {
+        let mut p = pipeline(&[7, 8]);
         let mut b = biome();
-        assert_eq!(b.accept(sample(7, 1, 1_000, 20.0)), AcceptOutcome::Accepted);
-        assert_eq!(b.accept(sample(8, 1, 1_000, 19.0)), AcceptOutcome::Accepted);
+        assert_eq!(
+            b.accept(verified_sample(&mut p, 7, 1, 1_000, 20.0)),
+            AcceptOutcome::Accepted
+        );
+        assert_eq!(
+            b.accept(verified_sample(&mut p, 8, 1, 1_000, 19.0)),
+            AcceptOutcome::Accepted
+        );
 
         let event = b.revoke_device(7, 5_000, "key compromised");
         assert!(b.is_revoked(7));
@@ -376,9 +441,16 @@ mod tests {
         );
         event.validate().unwrap();
 
-        // Revoked node blocked, healthy node keeps flowing.
-        assert_eq!(b.accept(sample(7, 2, 2_000, 20.5)), AcceptOutcome::Revoked);
-        assert_eq!(b.accept(sample(8, 2, 2_000, 19.5)), AcceptOutcome::Accepted);
+        // Revoked node blocked (even with a cryptographically valid sample),
+        // healthy node keeps flowing.
+        assert_eq!(
+            b.accept(verified_sample(&mut p, 7, 2, 2_000, 20.5)),
+            AcceptOutcome::Revoked
+        );
+        assert_eq!(
+            b.accept(verified_sample(&mut p, 8, 2, 2_000, 19.5)),
+            AcceptOutcome::Accepted
+        );
         assert_eq!(b.accepted_count(), 3);
     }
 
@@ -398,8 +470,9 @@ mod tests {
 
     #[test]
     fn revocation_event_verifies_and_tamper_breaks_it() {
+        let mut p = pipeline(&[7]);
         let mut b = biome();
-        b.accept(sample(7, 1, 1_000, 20.0));
+        b.accept(verified_sample(&mut p, 7, 1, 1_000, 20.0));
         let event = b.revoke_device(7, 5_000, "drift");
         assert!(verify_event(&event));
 
@@ -466,7 +539,8 @@ mod tests {
             open_access: false,
         };
         let mut b = Biome::new(config, SEED);
-        b.accept(sample(7, 1, 1_000, 20.0));
+        let mut p = pipeline(&[7]);
+        b.accept(verified_sample(&mut p, 7, 1, 1_000, 20.0));
         let event = b.revoke_device(7, 5_000, "tamper");
 
         // Before the delay elapses: withheld.
@@ -489,7 +563,8 @@ mod tests {
             open_access: true,
         };
         let mut b = Biome::new(config, SEED);
-        b.accept(sample(7, 1, 1_000, 20.0));
+        let mut p = pipeline(&[7]);
+        b.accept(verified_sample(&mut p, 7, 1, 1_000, 20.0));
         let event = b.revoke_device(7, 5_000, "x");
         let out = b.disclose_event(&event, 5_000).unwrap();
         assert_eq!(out.geo, event.geo);

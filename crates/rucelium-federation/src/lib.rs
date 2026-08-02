@@ -2,15 +2,22 @@
 //!
 //! Biome sovereignty for the RuCelium fabric (ADR-264 §6, §7, §10, §12):
 //!
-//! - [`OutageBuffer`] — gateway store-and-forward log with duplicate-free
-//!   replay across restarts (§14 criteria 2–3),
-//! - [`Biome`] — the sovereign regional aggregate: verified-only ingest,
-//!   global dedup spanning live ingest and buffer replay, device revocation
-//!   as signed events, and delayed / coarsened disclosure,
+//! - [`OutageBuffer`] — gateway store-and-forward log of **original signed
+//!   envelopes** with duplicate-free replay across restarts (§14 criteria
+//!   2–3); drained envelopes must pass
+//!   `rucelium_ingest::IngestPipeline::reverify_stored` (full cryptographic
+//!   re-verification) before they can enter a biome,
+//! - [`Biome`] — the sovereign regional aggregate: admission requires a
+//!   [`rucelium_ingest::VerifiedEnvSample`] (a sealed type only the ingest
+//!   pipeline can produce, so unverified data is unrepresentable at this
+//!   layer), global dedup spanning live ingest and buffer replay, device
+//!   revocation as signed events, and delayed / coarsened disclosure,
 //! - [`RegionalSummary`] + [`FederationBus`] — signed statistical summaries
-//!   are what federate between biomes instead of raw data (§6),
-//! - [`sensorthings`] — OGC SensorThings API 1.1 entity projection so every
-//!   accepted observation is externally interoperable (§7, §14 criterion 6).
+//!   are what federate between biomes instead of raw data (§6), with
+//!   biome-identity binding, key rotation by epoch, and replay-protected
+//!   publication,
+//! - [`sensorthings`] — a SensorThings-*inspired* entity projection so every
+//!   accepted observation is externally consumable (§7, §14 criterion 6).
 //!
 //! Everything is deterministic: ed25519 signing is RFC 8032 deterministic,
 //! keys derive from caller-supplied 32-byte seeds, and all timestamps are
@@ -81,9 +88,21 @@ pub(crate) mod sig {
 
 #[cfg(test)]
 pub(crate) mod testutil {
+    use rucelium_abi::{NodeSigner, RvEnvSampleV1, RV_ENV_SCHEMA_V1};
     use rucelium_core::{EnvSample, GeoPoint, SampleProvenance, SensorModality, Uncertainty};
+    use rucelium_ingest::{DeviceRegistry, IngestPipeline, VerifiedEnvSample};
 
-    /// A valid, verified test sample.
+    /// A deterministic 32-byte biome signer seed for tests.
+    pub(crate) const SEED: &[u8; 32] = b"rucelium-test-seed-32-bytes-ok!!";
+
+    /// The device-provisioning seed all test node keys derive from.
+    pub(crate) const PROVISION_SEED: &[u8; 32] = b"rucelium-provision-seed-32-byte!";
+
+    /// Firmware hash registered for every test device.
+    pub(crate) const FW: &str = "sha256:fw-test";
+
+    /// A bare (unsealed) sample for projection tests — [`crate::sensorthings`]
+    /// operates on plain [`EnvSample`]s, so this never needs the seal.
     pub(crate) fn sample(node_id: u64, sequence: u32, measured_ns: u64, value: f64) -> EnvSample {
         EnvSample {
             node_id,
@@ -101,7 +120,7 @@ pub(crate) mod testutil {
             flags: 0,
             battery_mv: 3300,
             provenance: SampleProvenance {
-                firmware_hash: "sha256:fw-test".into(),
+                firmware_hash: FW.into(),
                 signer_pubkey_hex: "aa".into(),
                 verified: true,
                 lineage: vec!["cal:1".into()],
@@ -109,6 +128,64 @@ pub(crate) mod testutil {
         }
     }
 
-    /// A deterministic 32-byte signer seed for tests.
-    pub(crate) const SEED: &[u8; 32] = b"rucelium-test-seed-32-bytes-ok!!";
+    /// The wire record a test node emits.
+    pub(crate) fn wire(node_id: u64, sequence: u32, measured_ns: u64, value: f64) -> RvEnvSampleV1 {
+        RvEnvSampleV1 {
+            schema_version: RV_ENV_SCHEMA_V1,
+            sensor_type: SensorModality::Weather.code(),
+            flags: 0,
+            node_id,
+            timestamp_ns: measured_ns,
+            sequence,
+            latitude_e7: 514_778_216,
+            longitude_e7: -14_767,
+            altitude_mm: 46_000,
+            value_q16: (value * 65_536.0) as i32,
+            quality_q15: 0x7000, // 0.875
+            battery_mv: 3300,
+            calibration_id: 1,
+        }
+    }
+
+    /// A real signed wire envelope from `node_id`'s provisioned key.
+    pub(crate) fn signed_envelope(
+        node_id: u64,
+        sequence: u32,
+        measured_ns: u64,
+        value: f64,
+    ) -> Vec<u8> {
+        NodeSigner::for_node(PROVISION_SEED, node_id)
+            .sign_sample(&wire(node_id, sequence, measured_ns, value))
+            .encode()
+    }
+
+    /// An ingest pipeline with the given devices registered under their real
+    /// provisioned keys.
+    pub(crate) fn pipeline(node_ids: &[u64]) -> IngestPipeline {
+        let mut reg = DeviceRegistry::new();
+        for &id in node_ids {
+            reg.register(
+                id,
+                NodeSigner::for_node(PROVISION_SEED, id).public_key(),
+                FW.to_string(),
+            );
+        }
+        IngestPipeline::new(reg)
+    }
+
+    /// A sealed sample, produced the only way possible: a real signed
+    /// envelope ingested through a real pipeline.
+    pub(crate) fn verified_sample(
+        p: &mut IngestPipeline,
+        node_id: u64,
+        sequence: u32,
+        measured_ns: u64,
+        value: f64,
+    ) -> VerifiedEnvSample {
+        p.ingest(
+            &signed_envelope(node_id, sequence, measured_ns, value),
+            measured_ns + 1_000_000,
+        )
+        .expect("test envelope must ingest")
+    }
 }

@@ -1,10 +1,16 @@
-//! OGC SensorThings API 1.1 projection (ADR-264 §7): typed serde structs
-//! producing the standard entity JSON shapes (`@iot.id`, camelCase field
-//! names) so every accepted observation is externally interoperable
-//! (§14 criterion 6).
+//! **SensorThings-inspired projection** (ADR-264 §7): typed serde structs
+//! modelled on the OGC SensorThings API 1.1 entity JSON shapes (`@iot.id`,
+//! camelCase field names) so every accepted observation is externally
+//! consumable (§14 criterion 6).
 //!
-//! v0.1 implements the biome → SensorThings *projection*; serving these
-//! entities over HTTP is a follow-up.
+//! Honest label: this is *inspired by* the SensorThings data model, not a
+//! conformant implementation — it must not be described as OGC-conformant
+//! until it passes an external OGC conformance suite. Known deliberate
+//! deviations are documented on the fields involved (see
+//! [`Sensor::encoding_type`]).
+//!
+//! v0.1 implements the biome → entity *projection*; serving these entities
+//! over HTTP is a follow-up.
 
 use rucelium_core::{EnvSample, GeoPoint};
 use serde::{Deserialize, Serialize};
@@ -31,7 +37,7 @@ impl GeoJsonPoint {
     }
 }
 
-/// SensorThings `Thing` — one per device.
+/// SensorThings-inspired `Thing` — one per device.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Thing {
@@ -44,7 +50,7 @@ pub struct Thing {
     pub description: String,
 }
 
-/// SensorThings `Location` of a Thing (GeoJSON encoded).
+/// SensorThings-inspired `Location` of a Thing (GeoJSON encoded).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Location {
@@ -59,7 +65,7 @@ pub struct Location {
     pub location: GeoJsonPoint,
 }
 
-/// SensorThings `Sensor` — the measuring procedure/instrument.
+/// SensorThings-inspired `Sensor` — the measuring procedure/instrument.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Sensor {
@@ -68,13 +74,22 @@ pub struct Sensor {
     pub iot_id: String,
     /// Human-readable name.
     pub name: String,
-    /// `"application/pdf"` per the SensorThings metadata convention.
+    /// Description (mandatory in the SensorThings data model).
+    pub description: String,
+    /// Always `"text/plain"`.
+    ///
+    /// **Deliberate deviation** from SensorThings 1.1, which enumerates only
+    /// `application/pdf` and SensorML encodings here: our `metadata` field
+    /// carries a firmware measurement-implementation hash string, which is
+    /// plain text, not PDF content — labelling it `application/pdf` would be
+    /// a lie about the bytes. This deviation is part of why this module is a
+    /// SensorThings-*inspired* projection rather than a conformant one.
     pub encoding_type: String,
     /// Sensor metadata: the firmware measurement-implementation hash.
     pub metadata: String,
 }
 
-/// SensorThings `ObservedProperty` — what is being measured.
+/// SensorThings-inspired `ObservedProperty` — what is being measured.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ObservedProperty {
@@ -89,7 +104,7 @@ pub struct ObservedProperty {
     pub description: String,
 }
 
-/// SensorThings `unitOfMeasurement` value object.
+/// SensorThings-inspired `unitOfMeasurement` value object.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UnitOfMeasurement {
@@ -101,8 +116,8 @@ pub struct UnitOfMeasurement {
     pub definition: String,
 }
 
-/// SensorThings `Datastream` — the series linking Thing, Sensor, and
-/// ObservedProperty.
+/// SensorThings-inspired `Datastream` — the series linking Thing, Sensor,
+/// and ObservedProperty.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Datastream {
@@ -111,6 +126,13 @@ pub struct Datastream {
     pub iot_id: String,
     /// Human-readable name.
     pub name: String,
+    /// Description (mandatory in the SensorThings data model).
+    pub description: String,
+    /// Observation type URI (mandatory in the SensorThings data model);
+    /// always the O&M measurement type,
+    /// `http://www.opengis.net/def/observationType/OGC-OM/2.0/OM_Measurement`.
+    #[serde(rename = "observationType")]
+    pub observation_type: String,
     /// Unit of measurement for all observations in this stream.
     pub unit_of_measurement: UnitOfMeasurement,
     /// Linked [`ObservedProperty`] id.
@@ -121,7 +143,7 @@ pub struct Datastream {
     pub thing_id: String,
 }
 
-/// SensorThings `Observation` — one measured value.
+/// SensorThings-inspired `Observation` — one measured value.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Observation {
@@ -140,7 +162,8 @@ pub struct Observation {
     pub datastream_id: String,
 }
 
-/// SensorThings `FeatureOfInterest` — where the observation applies.
+/// SensorThings-inspired `FeatureOfInterest` — where the observation
+/// applies.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FeatureOfInterest {
@@ -155,8 +178,8 @@ pub struct FeatureOfInterest {
     pub feature: GeoJsonPoint,
 }
 
-/// A fully linked SensorThings entity set for one observation — every
-/// accepted observation must be projectable (ADR-264 §14 criterion 6).
+/// A fully linked SensorThings-inspired entity set for one observation —
+/// every accepted observation must be projectable (ADR-264 §14 criterion 6).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SensorThingsBundle {
@@ -176,8 +199,12 @@ pub struct SensorThingsBundle {
     pub feature_of_interest: FeatureOfInterest,
 }
 
-/// Project one normalized [`EnvSample`] into a fully linked SensorThings
-/// entity set with stable, deterministic ids.
+/// The O&M measurement observation type URI stamped on every
+/// [`Datastream`].
+const OM_MEASUREMENT: &str = "http://www.opengis.net/def/observationType/OGC-OM/2.0/OM_Measurement";
+
+/// Project one normalized [`EnvSample`] into a fully linked
+/// SensorThings-inspired entity set with stable, deterministic ids.
 #[must_use]
 pub fn project_sample(sample: &EnvSample) -> SensorThingsBundle {
     let thing_id = format!("thing:node:{}", sample.node_id);
@@ -213,7 +240,13 @@ pub fn project_sample(sample: &EnvSample) -> SensorThingsBundle {
                 sample.modality.as_str(),
                 sample.node_id
             ),
-            encoding_type: "application/pdf".into(),
+            description: format!(
+                "{} sensor on RuCelium spore node {}, described by its firmware \
+                 measurement-implementation hash",
+                sample.modality.as_str(),
+                sample.node_id
+            ),
+            encoding_type: "text/plain".into(),
             metadata: sample.provenance.firmware_hash.clone(),
         },
         observed_property: ObservedProperty {
@@ -229,6 +262,11 @@ pub fn project_sample(sample: &EnvSample) -> SensorThingsBundle {
         datastream: Datastream {
             iot_id: datastream_id.clone(),
             name: format!("{} from node {}", sample.observed_property, sample.node_id),
+            description: format!(
+                "{} measurements from RuCelium spore node {}",
+                sample.observed_property, sample.node_id
+            ),
+            observation_type: OM_MEASUREMENT.into(),
             unit_of_measurement: UnitOfMeasurement {
                 name: sample.unit.clone(),
                 symbol: sample.unit.clone(),
@@ -344,11 +382,30 @@ mod tests {
         assert!(json.contains("\"resultQuality\""));
         assert!(json.contains("\"unitOfMeasurement\""));
         assert!(json.contains("\"encodingType\":\"application/geo+json\""));
-        assert!(json.contains("\"encodingType\":\"application/pdf\""));
+        // Sensor metadata is a firmware hash string, not PDF content.
+        assert!(json.contains("\"encodingType\":\"text/plain\""));
+        assert!(!json.contains("application/pdf"));
+        // Mandatory-per-spec fields are present.
+        assert!(json.contains(
+            "\"observationType\":\
+             \"http://www.opengis.net/def/observationType/OGC-OM/2.0/OM_Measurement\""
+        ));
+        assert!(json.contains("\"description\""));
         assert!(json.contains("\"type\":\"Point\""));
         // Round trips.
         let back: SensorThingsBundle = serde_json::from_str(&json).unwrap();
         assert_eq!(bundle, back);
+    }
+
+    #[test]
+    fn mandatory_descriptions_are_nonempty() {
+        let b = project_sample(&sample(7, 42, 1_000, 21.5));
+        assert!(!b.thing.description.is_empty());
+        assert!(!b.sensor.description.is_empty());
+        assert!(!b.observed_property.description.is_empty());
+        assert!(!b.datastream.description.is_empty());
+        assert_eq!(b.datastream.observation_type, OM_MEASUREMENT);
+        assert_eq!(b.sensor.encoding_type, "text/plain");
     }
 
     #[test]

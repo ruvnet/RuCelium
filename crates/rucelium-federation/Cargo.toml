@@ -11,6 +11,8 @@ categories = ["science"]
 
 [dependencies]
 rucelium-core = { workspace = true }
+rucelium-ingest = { workspace = true }
+rucelium-abi = { workspace = true }
 ed25519-dalek = { workspace = true }
 sha2 = { workspace = true }
 serde = { workspace = true }

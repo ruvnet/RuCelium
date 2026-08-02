@@ -19,6 +19,7 @@ members = [
     "crates/rucelium-store",
     "crates/rucelium-transport",
     "crates/rucelium-gateway",
+    "examples",
 ]
 
 [workspace.package]
@@ -57,6 +58,7 @@ rucelium-bench = { version = "0.1.0", path = "crates/rucelium-bench" }
 rucelium-store = { version = "0.1.0", path = "crates/rucelium-store" }
 rucelium-transport = { version = "0.1.0", path = "crates/rucelium-transport" }
 rucelium-gateway = { version = "0.1.0", path = "crates/rucelium-gateway" }
+rucelium-examples = { version = "0.1.0", path = "examples" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

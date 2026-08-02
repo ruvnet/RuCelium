@@ -939,11 +939,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "rucelium-examples"
+version = "0.1.0"
+dependencies = [
+ "rucelium-abi",
+ "rucelium-calibration",
+ "rucelium-core",
+ "rucelium-federation",
+ "rucelium-ingest",
+ "rucelium-policy",
+ "rucelium-store",
+ "rucelium-transport",
+ "rucelium-worldgraph",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "rucelium-federation"
 version = "0.1.0"
 dependencies = [
  "ed25519-dalek",
+ "rucelium-abi",
  "rucelium-core",
+ "rucelium-ingest",
  "serde",
  "serde_json",
  "sha2",
