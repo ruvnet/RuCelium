@@ -16,7 +16,7 @@
 //!
 //! Two implementations ship: [`HttpPollTransport`] here (always available,
 //! zero new dependencies, the backfill of record) and
-//! [`crate::transport_quic::QuicTransport`] behind the `quic` feature.
+//! `transport_quic::QuicTransport` behind the `quic` feature.
 //!
 //! # The transport is never the trust boundary (ADR-269 §4, normative)
 //!
@@ -155,7 +155,7 @@ impl PeerRef {
     }
 
     /// A peer whose federation identity is already known — the form
-    /// [`crate::transport_quic::QuicTransport`] requires, since the key is
+    /// `transport_quic::QuicTransport` requires, since the key is
     /// the pinned TLS identity (ADR-269 §4).
     #[must_use]
     pub fn with_identity(
@@ -373,8 +373,8 @@ impl FederationTransport for HttpPollTransport {
     /// [`crate::federation::accept_artifact`] to verify.
     ///
     /// `since_ns` selects the summary window; `0` (never synced) asks for
-    /// the default hour, and anything older than [`MAX_SUMMARY_WINDOW_S`] is
-    /// clamped.
+    /// the default hour, and anything older than a day is clamped (see
+    /// [`summary_window_s`]).
     fn sync_since<'a>(
         &'a self,
         peer: &'a PeerRef,
@@ -504,7 +504,10 @@ mod tests {
     #[test]
     fn summary_window_is_clamped_and_deterministic() {
         // Never synced: the default hour.
-        assert_eq!(summary_window_s(0, 10_000_000_000), DEFAULT_SUMMARY_WINDOW_S);
+        assert_eq!(
+            summary_window_s(0, 10_000_000_000),
+            DEFAULT_SUMMARY_WINDOW_S
+        );
         // 5 s of elapsed time asks for a 5 s window.
         assert_eq!(summary_window_s(5_000_000_000, 10_000_000_000), 5);
         // Sub-second gaps still ask for at least a second.
@@ -520,7 +523,10 @@ mod tests {
         let t = HttpPollTransport::new().expect("http transport builds");
         assert_eq!(t.name(), "http");
         let peer = PeerRef::new("http://127.0.0.1:1");
-        assert_eq!(t.subscribe(&peer).await.expect("no-op subscribe"), Vec::new());
+        assert_eq!(
+            t.subscribe(&peer).await.expect("no-op subscribe"),
+            Vec::new()
+        );
     }
 
     #[tokio::test]

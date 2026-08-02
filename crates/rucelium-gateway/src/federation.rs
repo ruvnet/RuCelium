@@ -358,7 +358,10 @@ async fn drain_subscription(
         match accept_artifact(&mut inner, artifact) {
             Ok(effect) => {
                 inner.push.pushes_received += 1;
-                eprintln!("gateway: streamed artifact from peer {}: {effect:?}", peer.url);
+                eprintln!(
+                    "gateway: streamed artifact from peer {}: {effect:?}",
+                    peer.url
+                );
             }
             Err(ArtifactRejection::NoEffect) => {}
             Err(e) => eprintln!(

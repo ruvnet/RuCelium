@@ -12,8 +12,21 @@
 //! HTTP :7465 ──► /health /api/stats /api/observations/recent /api/events
 //!            ──► /api/sensorthings/{Things,Datastreams,Observations}
 //!            ──► /api/federation/{pubkey,summary,revocations,peers}
+//!            ──► /api/federation/announce   (push inbox, ADR-269 §3)
 //!            ──► /api/admin/{revoke/:node_id,command}
 //! ```
+//!
+//! ## Push federation (ADR-269 §3)
+//!
+//! Federation is push-first over a swappable [`transport::FederationTransport`]:
+//! a revocation is `announce`d to every peer the instant it is signed, rather
+//! than waiting up to a polling interval — revocation latency is a security
+//! property. [`transport::HttpPollTransport`] is the always-available default;
+//! `transport_quic::QuicTransport` is optional behind the `quic` feature.
+//! The `sync_since` backstop is **mandatory** on every transport, so a peer
+//! that missed a push still converges, and everything received —  pushed or
+//! polled, over any transport — passes the same
+//! [`federation::accept_artifact`] verification (ADR-269 §4).
 //!
 //! ## Restart safety (ADR-265)
 //!
