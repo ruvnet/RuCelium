@@ -277,6 +277,7 @@ pub fn run_reserve() -> HabitatRun {
 
     // The internal event carries the real location. Reserve staff need it.
     let mut internal_event = EnvironmentalEvent {
+        evidence_digest: None,
         spec_version: SPEC_VERSION.to_string(),
         event_id: "habitat:sensitive-species:2026-001".to_string(),
         biome_id: BIOME_ID.to_string(),

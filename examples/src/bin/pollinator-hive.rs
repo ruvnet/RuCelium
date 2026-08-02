@@ -24,9 +24,10 @@
 //! cargo run -p rucelium-examples --bin pollinator-hive
 //! ```
 
+use rucelium_core::event::evidence_digest;
 use rucelium_core::{
-    DataClass, EnvironmentalEvent, EventKind, EvidenceRef, GeoPoint, SensorModality, Severity,
-    SPEC_VERSION,
+    DataClass, EnvSample, EnvironmentalEvent, EventKind, EvidenceRef, GeoPoint, SensorModality,
+    Severity, SPEC_VERSION,
 };
 use rucelium_examples::{
     banner, line, synthetic_footer, Gateway, Node, Rng, EPOCH_NS, NS_PER_S, S_PER_DAY,
@@ -280,6 +281,9 @@ pub struct HiveDay {
     pub weight_kg: f64,
     /// Weight gained today, kg.
     pub gain_kg: f64,
+    /// The last verified acoustic observation of the day, retained so events
+    /// can bind the *content* of their evidence (ADR-266 §3.1).
+    pub sample: EnvSample,
 }
 
 /// A per-hive verdict on one evaluated day.
@@ -309,6 +313,8 @@ pub struct HiveVerdict {
     pub node_id: u64,
     /// Sequence of the evidence sample.
     pub sequence: u32,
+    /// The verified observation itself (content-binding evidence).
+    pub sample: EnvSample,
 }
 
 /// A whole-apiary assessment on one evaluated day.
@@ -426,6 +432,7 @@ pub fn run() -> Report {
             let (mut a, mut f, mut t, mut hu) = (0.0, 0.0, 0.0, 0.0);
             let mut last_seq = 0;
             let mut node_id = 0;
+            let mut last_sample: Option<EnvSample> = None;
             for slot in 0..SLOTS {
                 let ns = slot_ns(day, slot);
                 // Foraging is diurnal: the index peaks in the middle of the
@@ -440,6 +447,7 @@ pub fn run() -> Report {
                 a += s.sample().value;
                 last_seq = s.sample().sequence;
                 node_id = s.sample().node_id;
+                last_sample = Some(s.sample().clone());
 
                 let fv = h.base_field + field_effect(h, day) + rng.noise(h.sd_field);
                 let env = nodes[n + i].emit(fv, ns, 1);
@@ -477,6 +485,7 @@ pub fn run() -> Report {
                 humidity: hu / d,
                 weight_kg: weights[i],
                 gain_kg: gain,
+                sample: last_sample.expect("at least one slot per day"),
             });
         }
         days.push(row);
@@ -534,6 +543,7 @@ pub fn run() -> Report {
                 swarm_precursor,
                 node_id: d.node_id,
                 sequence: d.sequence,
+                sample: d.sample.clone(),
             });
         }
         let correlated_hives = verdicts.iter().filter(|v| v.collapse).count();
@@ -542,6 +552,9 @@ pub fn run() -> Report {
         let swarming: Vec<&HiveVerdict> = verdicts.iter().filter(|v| v.swarm_precursor).collect();
         let event = if !collapsing.is_empty() {
             Some(EnvironmentalEvent {
+                evidence_digest: Some(evidence_digest(
+                    &collapsing.iter().map(|v| &v.sample).collect::<Vec<_>>(),
+                )),
                 spec_version: SPEC_VERSION.into(),
                 event_id: format!("evt-b4-collapse-d{day:03}"),
                 biome_id: "biome/orchard-apiary".into(),
@@ -569,6 +582,9 @@ pub fn run() -> Report {
             })
         } else if !swarming.is_empty() {
             Some(EnvironmentalEvent {
+                evidence_digest: Some(evidence_digest(
+                    &swarming.iter().map(|v| &v.sample).collect::<Vec<_>>(),
+                )),
                 spec_version: SPEC_VERSION.into(),
                 event_id: format!("evt-b4-swarm-d{day:03}"),
                 biome_id: "biome/orchard-apiary".into(),
@@ -710,12 +726,16 @@ fn main() {
             format!("{thermal} of 3"),
         );
         line("colonies collapsing in this window", a.correlated_hives);
-        line("evidence is a single colony (biology only)", a.bio_only);
-        line(
-            "severity before the biological cap",
-            format!("{:?}", a.uncapped),
-        );
-        line("severity emitted", format!("{:?}", a.severity));
+        if a.correlated_hives == 0 {
+            line("collapse evidence", "none — nothing to cap");
+        } else {
+            line("evidence is a single colony (biology only)", a.bio_only);
+            line(
+                "collapse severity before the biological cap",
+                format!("{:?}", a.uncapped),
+            );
+            line("collapse severity emitted", format!("{:?}", a.severity));
+        }
         match &a.event {
             Some(ev) => {
                 ev.validate().expect("event is structurally valid");
@@ -823,6 +843,10 @@ mod tests {
         let ev = a.event.as_ref().expect("critical event");
         ev.validate().unwrap();
         assert_eq!(ev.evidence.len(), 3);
+        assert!(ev
+            .evidence_digest
+            .as_ref()
+            .is_some_and(|d| d.starts_with("sha256:")));
         assert!(ev.confidence > 0.8);
     }
 

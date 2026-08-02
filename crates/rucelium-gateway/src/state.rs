@@ -24,11 +24,11 @@ use rucelium_store::{EventStore, ObservationStore};
 use rucelium_transport::Reassembler;
 use rucelium_worldgraph::WorldGraph;
 use serde::Serialize;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
-use tokio::sync::Mutex;
+use tokio::sync::{broadcast, Mutex};
 
 /// Max records per observation segment file.
 const OBS_SEGMENT_MAX_RECORDS: usize = 4096;
@@ -74,6 +74,35 @@ pub struct PeerSummary {
     pub fetched_ns: u64,
 }
 
+/// Push-federation counters (ADR-269 §3): how well the push path and its
+/// mandatory polling backstop are actually doing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct PushStats {
+    /// Artifacts this gateway pushed to a peer and the peer accepted.
+    pub pushes_sent: u64,
+    /// Artifacts a peer pushed to this gateway that **verified** and were
+    /// accepted (`POST /api/federation/announce`, or a QUIC stream).
+    pub pushes_received: u64,
+    /// Push attempts that failed — unreachable peer, protocol refusal, or a
+    /// refused transport identity. Never fatal: the backstop converges.
+    pub push_failures: u64,
+    /// Completed `sync_since` backfill passes (the ADR-269 §3 backstop).
+    pub backfills: u64,
+}
+
+/// A peer's federation identity as learned on first contact, and the address
+/// it was learned from. This is the `biome_id → key` binding every received
+/// artifact is checked against (ADR-269 §4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct KnownPeer {
+    /// Peer biome identity (the map key).
+    pub biome_id: String,
+    /// The peer's published ed25519 federation key, hex.
+    pub pubkey_hex: String,
+    /// Where the identity was learned from.
+    pub url: String,
+}
+
 /// Counters for the governed control path (ADR-264 §9).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct ControlStats {
@@ -117,6 +146,11 @@ pub struct Inner {
     pub applied_revocation_ids: BTreeSet<String>,
     /// How many verified peer `DeviceRevoked` events were applied.
     pub applied_peer_revocations: u64,
+    /// Federation identities learned on first contact, keyed by `biome_id`
+    /// (ADR-269 §4: the identity binding every artifact is checked against).
+    pub known_peers: BTreeMap<String, KnownPeer>,
+    /// Push-federation counters (ADR-269 §3).
+    pub push: PushStats,
     /// Local alert events raised (flood / anomaly rule).
     pub alerts: u64,
     /// Calibration application errors (sample kept raw, never repaired).
@@ -236,6 +270,8 @@ impl Inner {
             peer_summaries: Vec::new(),
             applied_revocation_ids: BTreeSet::new(),
             applied_peer_revocations: 0,
+            known_peers: BTreeMap::new(),
+            push: PushStats::default(),
             alerts: 0,
             calibration_errors: 0,
             datagrams: DatagramStats::default(),
@@ -273,6 +309,15 @@ impl Inner {
     }
 }
 
+/// Depth of the push queue between the code that mints an artifact (e.g. the
+/// admin revoke handler) and the federation task that announces it. A
+/// `broadcast` channel is deliberate: a send with no federation task running
+/// is a no-op instead of an unbounded leak, and an overrun drops the
+/// *oldest* artifact rather than blocking the caller. Either way the ADR-269
+/// §3 backstop converges the peer, which is exactly why push is allowed to
+/// be best-effort.
+const PUSH_QUEUE_DEPTH: usize = 256;
+
 /// Handle shared by every task and HTTP handler. Cheap to clone.
 #[derive(Clone)]
 pub struct GatewayState {
@@ -282,16 +327,33 @@ pub struct GatewayState {
     pub inner: Arc<Mutex<Inner>>,
     /// Daemon start time, for `uptime_s`.
     pub started: Instant,
+    /// Outbound push queue (ADR-269 §3). Anything that mints a locally
+    /// signed artifact publishes it here; the federation task announces it
+    /// to every peer immediately.
+    pub push_tx: broadcast::Sender<crate::transport::FederationArtifact>,
 }
 
 impl GatewayState {
     /// Open the durable stores and assemble the gateway state.
     pub fn open(config: &GatewayConfig) -> Result<Self, String> {
+        let (push_tx, _) = broadcast::channel(PUSH_QUEUE_DEPTH);
         Ok(GatewayState {
             biome_id: config.biome_id.clone(),
             inner: Arc::new(Mutex::new(Inner::open(config)?)),
             started: Instant::now(),
+            push_tx,
         })
+    }
+
+    /// Queue one locally signed artifact for immediate push to every peer
+    /// (ADR-269 §3: a revoked device must not stay valid at peer gateways
+    /// for a polling interval).
+    ///
+    /// Returns how many federation tasks were listening — `0` means nothing
+    /// is federating right now, which is not an error: the receiving side's
+    /// `sync_since` backstop is what makes push safe to drop.
+    pub fn announce_local(&self, artifact: crate::transport::FederationArtifact) -> usize {
+        self.push_tx.send(artifact).unwrap_or(0)
     }
 }
 

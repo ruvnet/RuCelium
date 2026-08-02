@@ -33,8 +33,10 @@
 //! cargo run -p rucelium-examples --bin airborne-dna
 //! ```
 
+use rucelium_core::event::evidence_digest;
 use rucelium_core::{
-    EnvironmentalEvent, EventKind, EvidenceRef, GeoPoint, SensorModality, Severity, SPEC_VERSION,
+    EnvSample, EnvironmentalEvent, EventKind, EvidenceRef, GeoPoint, SensorModality, Severity,
+    SPEC_VERSION,
 };
 use rucelium_examples::{banner, line, synthetic_footer, Gateway, Node, Rng, EPOCH_NS, NS_PER_S};
 use rucelium_federation::{verify_event, Biome, BiomeConfig};
@@ -492,7 +494,7 @@ pub fn run() -> Report {
         let naive_would_trigger = naive_z >= TRIGGER_Z;
         let sampler_triggered = adjusted_z >= TRIGGER_Z;
 
-        let (dna, disclosure, sampler_seq) = if sampler_triggered {
+        let (dna, disclosure, sampler_obs): (_, _, Option<EnvSample>) = if sampler_triggered {
             // The sampler logs its own observation (eDNA yield, ng/L) through
             // the same verified path as every other node.
             let yield_ng = 18.0 + rng.noise(2.0);
@@ -510,7 +512,7 @@ pub fn run() -> Report {
                 spec.taxa.clone(),
             );
             let d = disclose(&result, station, coarsen);
-            (Some(result), Some(d), Some(seq))
+            (Some(result), Some(d), Some(sm.sample().clone()))
         } else {
             (None, None, None)
         };
@@ -593,8 +595,9 @@ pub fn run() -> Report {
         let event = if invasive.is_empty() {
             None
         } else {
-            let seq = sampler_seq.expect("a sample was taken");
+            let obs = sampler_obs.as_ref().expect("a sample was taken");
             Some(EnvironmentalEvent {
+                evidence_digest: Some(evidence_digest(&[obs])),
                 spec_version: SPEC_VERSION.into(),
                 event_id: format!("evt-b3-invasive-{:02}", i + 1),
                 biome_id: "biome/river-corridor".into(),
@@ -606,8 +609,8 @@ pub fn run() -> Report {
                 window_end_ns: ns + 60 * NS_PER_S,
                 detected_ns: ns + 60 * NS_PER_S,
                 evidence: vec![EvidenceRef {
-                    node_id: 0x00B3_0000_0000_0003,
-                    sequence: seq,
+                    node_id: obs.node_id,
+                    sequence: obs.sequence,
                 }],
                 confidence: 0.74,
                 message: format!(
@@ -866,6 +869,10 @@ mod tests {
         ev.validate().unwrap();
         assert_eq!(ev.severity, Severity::Advisory);
         assert!(ev.message.contains("Dreissena polymorpha"));
+        assert!(ev
+            .evidence_digest
+            .as_ref()
+            .is_some_and(|d| d.starts_with("sha256:")));
         // It federates, coarsened and re-signed by the biome.
         let de = ep.disclosed_event.as_ref().expect("event disclosed");
         assert!(verify_event(de));

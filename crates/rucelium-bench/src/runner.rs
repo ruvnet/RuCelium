@@ -484,6 +484,9 @@ pub fn run(config: SimConfig) -> BiomeReport {
                             sequence: view.sequence,
                         }],
                         confidence: 0.92,
+                        // Bind the cited observation's CONTENT, not just its
+                        // (node, sequence) identity — ADR-266 §3.1.
+                        evidence_digest: Some(rucelium_core::evidence_digest(&[sample.sample()])),
                         message: format!("water level {:.2} m above flood threshold", view.value),
                         signature_hex: None,
                         signer_pubkey_hex: None,

@@ -328,6 +328,7 @@ fn fire_event(
     message: String,
 ) -> EnvironmentalEvent {
     let event = EnvironmentalEvent {
+        evidence_digest: None,
         spec_version: SPEC_VERSION.to_string(),
         event_id: id.to_string(),
         biome_id: BIOME_ID.to_string(),
@@ -400,12 +401,8 @@ pub fn run_fire_watch() -> WildfireRun {
 
         for idx in 0..NODE_COUNT {
             let value = truth(idx, round) + rng.noise(noise_sd(idx));
-            let envelope = nodes[idx].emit_with_quality(
-                value,
-                measured,
-                CALIBRATION_ID,
-                quality(idx, round),
-            );
+            let envelope =
+                nodes[idx].emit_with_quality(value, measured, CALIBRATION_ID, quality(idx, round));
             let sealed = gateway
                 .ingest(&envelope, received)
                 .expect("a node's own signed envelope must ingest");
@@ -517,10 +514,7 @@ pub fn run_fire_watch() -> WildfireRun {
                         values[WIND],
                         values[SOIL],
                         if physical_evidence {
-                            format!(
-                                "PM {:.0} ug/m3 AND smoke {:.2}",
-                                values[PM], values[SMOKE]
-                            )
+                            format!("PM {:.0} ug/m3 AND smoke {:.2}", values[PM], values[SMOKE])
                         } else {
                             format!(
                                 "none (PM {:.0} ug/m3, smoke {:.2})",
@@ -576,9 +570,7 @@ fn main() {
             format!(
                 "risk {:.3}  {:<9} sensors {}/5  PM {:>5.0}  smoke {:.2}{}",
                 round.risk,
-                round
-                    .severity
-                    .map_or("—".to_string(), |s| format!("{s:?}")),
+                round.severity.map_or("—".to_string(), |s| format!("{s:?}")),
                 round.sensors_used,
                 round.pm_ug_m3,
                 round.smoke_index,
@@ -613,7 +605,10 @@ fn main() {
     ] {
         let event = rf_only_alert(&rf, proposed, provision()[SMOKE].geo);
         line(
-            &format!("  RF proposes {proposed:?} at confidence {:.2}", rf.confidence),
+            &format!(
+                "  RF proposes {proposed:?} at confidence {:.2}",
+                rf.confidence
+            ),
             format!(
                 "event severity {:?}{}",
                 event.severity,
@@ -662,7 +657,10 @@ fn main() {
         .degradation
         .as_ref()
         .expect("the exposed hygrometer fails");
-    line("event kind / severity", format!("{:?} / {:?}", degradation.kind, degradation.severity));
+    line(
+        "event kind / severity",
+        format!("{:?} / {:?}", degradation.kind, degradation.severity),
+    );
     line("message", &degradation.message);
     line(
         "reported, not silently dropped",
@@ -748,7 +746,11 @@ mod tests {
 
         // And no round before ignition ever reaches Critical.
         for round in run.rounds.iter().take(IGNITION_ROUND) {
-            assert!(round.severity < Some(Severity::Critical), "hour {}", round.hour);
+            assert!(
+                round.severity < Some(Severity::Critical),
+                "hour {}",
+                round.hour
+            );
         }
         // The severity function itself: environmental risk tops out at Warning.
         assert_eq!(severity_for(0.99, false), Some(Severity::Warning));

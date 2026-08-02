@@ -29,8 +29,10 @@
 //! machinery is the real production code.** Nothing here is evidence that
 //! plant electrophysiology predicts drought.
 
+use rucelium_core::event::evidence_digest;
 use rucelium_core::{
-    EnvironmentalEvent, EventKind, EvidenceRef, GeoPoint, SensorModality, Severity, SPEC_VERSION,
+    EnvSample, EnvironmentalEvent, EventKind, EvidenceRef, GeoPoint, SensorModality, Severity,
+    SPEC_VERSION,
 };
 use rucelium_examples::{
     banner, line, synthetic_footer, Gateway, Node, Rng, EPOCH_NS, NS_PER_S, S_PER_DAY,
@@ -262,6 +264,9 @@ pub struct Verdict {
     pub adjusted_fired: bool,
     /// Whether the paired conventional sensor corroborates drought.
     pub soil_corroborates: bool,
+    /// The verified observation itself, retained so the event can bind the
+    /// *content* of its evidence and not merely its identity (ADR-266 §3.1).
+    pub sample: EnvSample,
 }
 
 /// Everything one deterministic run produces. `main` prints it; the tests
@@ -518,6 +523,7 @@ pub fn run() -> Report {
                     // The conventional reference's own rule, independent of
                     // any biology: soil moisture 8 points below its baseline.
                     soil_corroborates: soil_pct < b.mean_soil_pct - 8.0,
+                    sample: bio.sample().clone(),
                 });
             }
             if evaluating {
@@ -553,6 +559,9 @@ pub fn run() -> Report {
         None
     } else {
         Some(EnvironmentalEvent {
+            evidence_digest: Some(evidence_digest(
+                &fired.iter().map(|v| &v.sample).collect::<Vec<_>>(),
+            )),
             spec_version: SPEC_VERSION.into(),
             event_id: "evt-b1-sentinel-forest-0001".into(),
             biome_id: "biome/upland-catchment".into(),
@@ -893,6 +902,9 @@ mod tests {
         ev.validate().expect("valid event");
         assert_eq!(r.uncapped_severity, Severity::Warning);
         assert_eq!(ev.severity, Severity::Advisory);
+        // The event binds the CONTENT of its evidence, not just its identity.
+        let digest = ev.evidence_digest.as_ref().expect("content-bound");
+        assert!(digest.starts_with("sha256:"));
         assert_eq!(ev.modality, SensorModality::Bioelectric);
         // Corroboration moved confidence, never severity.
         assert!(r.confidence_corroborated > r.confidence_bio_only);

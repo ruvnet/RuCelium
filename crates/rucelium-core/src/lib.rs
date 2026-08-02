@@ -23,7 +23,7 @@ pub mod sample;
 
 pub use calibration::CalibrationRecord;
 pub use error::EnvError;
-pub use event::{EnvironmentalEvent, EventKind, EvidenceRef, Severity};
+pub use event::{evidence_digest, EnvironmentalEvent, EventKind, EvidenceRef, Severity};
 pub use geo::GeoPoint;
 pub use modality::{DataClass, Residency, SensorModality};
 pub use sample::{EnvFrame, EnvSample, SampleProvenance, Uncertainty};

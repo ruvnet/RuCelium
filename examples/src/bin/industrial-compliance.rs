@@ -219,14 +219,28 @@ pub fn verify_bundle(
     let calibration_head: u32 = signed_field(message, "cal_head=")?
         .parse()
         .map_err(|e| format!("signed calibration head is not a number: {e}"))?;
-    let signed_digest = signed_field(message, "obs_digest=")?;
-    let observed_digest = sha256_hex(
-        &serde_json::to_vec(&bundle.observations)
-            .map_err(|e| format!("observations do not serialize: {e}"))?,
-    );
+    // Prefer the structured, signed field; fall back to the legacy
+    // message-embedded digest for events minted before the schema gained it.
+    let (signed_digest, observed_digest) = match bundle.event.evidence_digest.as_deref() {
+        // Structured, signed, content-binding (rucelium_core::evidence_digest).
+        Some(d) => (
+            d.to_string(),
+            rucelium_core::evidence_digest(&bundle.observations.iter().collect::<Vec<_>>()),
+        ),
+        // Legacy events that predate the schema field carried the digest
+        // inside the signed message string.
+        None => (
+            signed_field(message, "obs_digest=")?.to_string(),
+            sha256_hex(
+                &serde_json::to_vec(&bundle.observations)
+                    .map_err(|e| format!("observations do not serialize: {e}"))?,
+            ),
+        ),
+    };
     if observed_digest != signed_digest {
-        return Err("observation digest mismatch: the observations are not the signed ones"
-            .to_string());
+        return Err(
+            "observation digest mismatch: the observations are not the signed ones".to_string(),
+        );
     }
 
     // (3) + (4) Calibration lineage: signed, trusted, parent-linked, anchored.
@@ -237,10 +251,7 @@ pub fn verify_bundle(
         verify_record_signature(record)
             .map_err(|e| format!("calibration {} fails signature: {e}", record.calibration_id))?;
         let signer = record.signer_pubkey_hex.as_deref().unwrap_or_default();
-        if !trusted_calibration_authorities
-            .iter()
-            .any(|k| k == signer)
-        {
+        if !trusted_calibration_authorities.iter().any(|k| k == signer) {
             return Err(format!(
                 "calibration {} signed by an untrusted authority",
                 record.calibration_id
@@ -292,7 +303,9 @@ pub fn verify_bundle(
             return Err("cited observation was never verified at ingest".to_string());
         }
         if observation.calibration_id != calibration_head {
-            return Err("cited observation was not produced with the signed calibration".to_string());
+            return Err(
+                "cited observation was not produced with the signed calibration".to_string(),
+            );
         }
         let expected_lineage = format!("cal:{calibration_head}");
         if !observation.provenance.lineage.contains(&expected_lineage) {
@@ -332,7 +345,11 @@ pub fn provision() -> Vec<Node> {
             Node::new(
                 *node_id,
                 *modality,
-                geo(546_000_000 + (i as i32) * 1_300, -11_200_000 - (i as i32) * 900, 8_000),
+                geo(
+                    546_000_000 + (i as i32) * 1_300,
+                    -11_200_000 - (i as i32) * 900,
+                    8_000,
+                ),
                 label,
             )
         })
@@ -473,7 +490,9 @@ pub fn run_compliance() -> ComplianceRun {
             Q16_ONE,
             0,
         );
-        signer.sign_record(&mut anchor).expect("record canonicalizes");
+        signer
+            .sign_record(&mut anchor)
+            .expect("record canonicalizes");
         store.insert(anchor).expect("signed anchor is accepted");
 
         let mut child = record(
@@ -487,7 +506,9 @@ pub fn run_compliance() -> ComplianceRun {
             66_847,   // ≈ 1.020
             -196_608, // -3.0
         );
-        signer.sign_record(&mut child).expect("record canonicalizes");
+        signer
+            .sign_record(&mut child)
+            .expect("record canonicalizes");
         store.insert(child).expect("signed child is accepted");
     }
 
@@ -613,10 +634,15 @@ pub fn run_compliance() -> ComplianceRun {
     let lineage = store
         .verify_lineage(calibration_head)
         .expect("the discharge lineage resolves to an anchor");
-    let digest = sha256_hex(
-        &serde_json::to_vec(&observations).expect("observations serialize"),
-    );
+    let digest = sha256_hex(&serde_json::to_vec(&observations).expect("observations serialize"));
     let mut event = EnvironmentalEvent {
+        // The schema now binds observation CONTENT into the signature
+        // (rucelium_core::evidence_digest). Previously this example had to
+        // smuggle a digest through the signed `message` string because
+        // EvidenceRef pins identity only — that gap is closed.
+        evidence_digest: Some(rucelium_core::evidence_digest(
+            &observations.iter().collect::<Vec<_>>(),
+        )),
         spec_version: SPEC_VERSION.to_string(),
         event_id: "compliance:dp1-exceedance-2026-001".to_string(),
         biome_id: BIOME_ID.to_string(),
@@ -742,7 +768,10 @@ fn main() {
             ),
         );
     }
-    line("unsigned record", format!("REFUSED — {}", run.unsigned_refusal));
+    line(
+        "unsigned record",
+        format!("REFUSED — {}", run.unsigned_refusal),
+    );
     line(
         "record signed by an unregistered key",
         format!("REFUSED — {}", run.rogue_refusal),
@@ -754,12 +783,24 @@ fn main() {
 
     println!("\n  2. Transformation lineage on the evidence");
     let first = &run.bundle.observations[0];
-    line("cited observation", format!("node {:#018x} seq {}", first.node_id, first.sequence));
-    line("reported value", format!("{:.2} {}", first.value, first.unit));
-    line("uncertainty", format!("± {:.2}", first.uncertainty.width() / 2.0));
+    line(
+        "cited observation",
+        format!("node {:#018x} seq {}", first.node_id, first.sequence),
+    );
+    line(
+        "reported value",
+        format!("{:.2} {}", first.value, first.unit),
+    );
+    line(
+        "uncertainty",
+        format!("± {:.2}", first.uncertainty.width() / 2.0),
+    );
     line("verified at ingest", first.provenance.verified);
     line("signer key", &first.provenance.signer_pubkey_hex);
-    line("provenance.lineage", format!("{:?}", first.provenance.lineage));
+    line(
+        "provenance.lineage",
+        format!("{:?}", first.provenance.lineage),
+    );
 
     println!("\n  3. Sensor tampering (attacker's device key)");
     line(
@@ -768,7 +809,10 @@ fn main() {
     );
 
     println!("\n  4. Independent verification of the bundle");
-    line("bundle size", format!("{} bytes of JSON", run.bundle_json.len()));
+    line(
+        "bundle size",
+        format!("{} bytes of JSON", run.bundle_json.len()),
+    );
     match verify_bundle(
         &run.bundle_json,
         &run.biome_pubkey_hex,
@@ -803,7 +847,8 @@ fn main() {
         };
         line(&format!("  {name}"), verdict);
     }
-    let verdict = match verify_bundle(&run.bundle_json, &"00".repeat(32), &run.trusted_authorities) {
+    let verdict = match verify_bundle(&run.bundle_json, &"00".repeat(32), &run.trusted_authorities)
+    {
         Ok(_) => "PASS — guarantee broken".to_string(),
         Err(why) => format!("REJECTED — {why}"),
     };
@@ -854,12 +899,9 @@ mod tests {
     fn verification_is_bound_to_the_trusted_keys() {
         let run = run_compliance();
         // Wrong biome key.
-        assert!(verify_bundle(
-            &run.bundle_json,
-            &"00".repeat(32),
-            &run.trusted_authorities
-        )
-        .is_err());
+        assert!(
+            verify_bundle(&run.bundle_json, &"00".repeat(32), &run.trusted_authorities).is_err()
+        );
         // No trusted calibration authorities at all.
         assert!(verify_bundle(&run.bundle_json, &run.biome_pubkey_hex, &[]).is_err());
         // Garbage in, error out — never a panic.
@@ -869,9 +911,15 @@ mod tests {
     #[test]
     fn the_strict_store_refuses_unsigned_and_untrusted_records() {
         let run = run_compliance();
-        assert_eq!(run.unsigned_refusal, CalibrationError::MissingSignature(900));
+        assert_eq!(
+            run.unsigned_refusal,
+            CalibrationError::MissingSignature(900)
+        );
         assert!(
-            matches!(run.rogue_refusal, CalibrationError::UntrustedSigner { id: 901, .. }),
+            matches!(
+                run.rogue_refusal,
+                CalibrationError::UntrustedSigner { id: 901, .. }
+            ),
             "got {:?}",
             run.rogue_refusal
         );
@@ -903,9 +951,10 @@ mod tests {
                 .provenance
                 .lineage
                 .contains(&format!("cal:{}", SPEC[DISCHARGE].5)));
-            assert!(observation.provenance.lineage.contains(
-                &"abi:rv_env_sample_v1".to_string()
-            ));
+            assert!(observation
+                .provenance
+                .lineage
+                .contains(&"abi:rv_env_sample_v1".to_string()));
             assert!(observation.value > CONSENT_LIMIT_UMOL_L);
         }
     }

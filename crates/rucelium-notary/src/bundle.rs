@@ -456,6 +456,7 @@ mod tests {
 
     fn event() -> EnvironmentalEvent {
         EnvironmentalEvent {
+            evidence_digest: None,
             spec_version: SPEC_VERSION.into(),
             event_id: "evt-0001".into(),
             biome_id: "biome/thames-estuary".into(),

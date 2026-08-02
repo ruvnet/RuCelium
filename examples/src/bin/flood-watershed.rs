@@ -352,6 +352,7 @@ fn watershed_event(
     message: String,
 ) -> EnvironmentalEvent {
     let event = EnvironmentalEvent {
+        evidence_digest: None,
         spec_version: SPEC_VERSION.to_string(),
         event_id: id.to_string(),
         biome_id: BIOME_ID.to_string(),

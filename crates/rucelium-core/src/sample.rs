@@ -258,3 +258,35 @@ mod tests {
         assert_eq!(sample().dedup_key(), (7, 42));
     }
 }
+
+/// Test-support constructors shared across the crate's unit tests.
+#[cfg(test)]
+pub(crate) mod tests_support {
+    use super::*;
+
+    /// A minimal valid sample with a caller-chosen identity and value.
+    pub(crate) fn sample_for_digest(node_id: u64, sequence: u32, value: f64) -> EnvSample {
+        EnvSample {
+            node_id,
+            sequence,
+            measured_ns: 1_000,
+            received_ns: 2_000,
+            geo: GeoPoint::new(514_778_216, -14_767, 46_000).unwrap(),
+            modality: SensorModality::Weather,
+            observed_property: "air_temperature".into(),
+            unit: "Cel".into(),
+            value,
+            quality: 0.98,
+            uncertainty: Uncertainty::symmetric(value, 0.3),
+            calibration_id: 3,
+            flags: 0,
+            battery_mv: 3600,
+            provenance: SampleProvenance {
+                firmware_hash: "sha256:abc".into(),
+                signer_pubkey_hex: "00ff".into(),
+                verified: true,
+                lineage: vec!["cal:3".into()],
+            },
+        }
+    }
+}

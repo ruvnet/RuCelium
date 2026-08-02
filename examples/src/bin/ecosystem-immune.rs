@@ -28,8 +28,10 @@
 //! cargo run -p rucelium-examples --bin ecosystem-immune
 //! ```
 
+use rucelium_core::event::evidence_digest;
 use rucelium_core::{
-    EnvironmentalEvent, EventKind, EvidenceRef, GeoPoint, SensorModality, Severity, SPEC_VERSION,
+    EnvSample, EnvironmentalEvent, EventKind, EvidenceRef, GeoPoint, SensorModality, Severity,
+    SPEC_VERSION,
 };
 use rucelium_examples::{banner, line, synthetic_footer, Gateway, Node, Rng, EPOCH_NS, NS_PER_S};
 use rucelium_policy::{
@@ -231,6 +233,9 @@ pub struct PointState {
     pub naive_fired: bool,
     /// Whether the conventional chemical probe detected the analyte.
     pub chemical_fired: bool,
+    /// The verified observation itself, retained so the event can bind the
+    /// *content* of its evidence and not merely its identity (ADR-266 §3.1).
+    pub sample: EnvSample,
 }
 
 /// A cross-checked assessment at one moment in the incident.
@@ -575,6 +580,7 @@ pub fn run() -> Report {
                 biofilm_fired: comp_z.abs() >= BIOFILM_TRIGGER_Z,
                 naive_fired: raw_z.abs() >= BIOFILM_TRIGGER_Z,
                 chemical_fired: chem > b.mean_chem_umol + CHEMICAL_TRIGGER_UMOL,
+                sample: bio.sample().clone(),
             });
         }
 
@@ -633,6 +639,9 @@ pub fn run() -> Report {
             None
         } else {
             Some(EnvironmentalEvent {
+                evidence_digest: Some(evidence_digest(
+                    &fired.iter().map(|p| &p.sample).collect::<Vec<_>>(),
+                )),
                 spec_version: SPEC_VERSION.into(),
                 event_id: format!("evt-b2-immune-{step:04}"),
                 biome_id: "biome/reach-b".into(),
@@ -775,12 +784,16 @@ fn main() {
             "naive / compensated / chemical detections",
             format!("{naive} / {bio} / {chem}"),
         );
-        line("evidence is biology only", a.bio_only);
-        line(
-            "severity before the biological cap",
-            format!("{:?}", a.uncapped),
-        );
-        line("severity emitted", format!("{:?}", a.severity));
+        if bio == 0 {
+            line("biological evidence", "none — nothing to cap");
+        } else {
+            line("evidence is biology only", a.bio_only);
+            line(
+                "severity before the biological cap",
+                format!("{:?}", a.uncapped),
+            );
+            line("severity emitted", format!("{:?}", a.severity));
+        }
         line(
             "source localized (most upstream responder)",
             a.source_label.clone().unwrap_or_else(|| "—".into()),
@@ -854,6 +867,10 @@ mod tests {
         let ev = a.event.as_ref().expect("an advisory event was raised");
         ev.validate().unwrap();
         assert_eq!(ev.severity, Severity::Advisory);
+        assert!(ev
+            .evidence_digest
+            .as_ref()
+            .is_some_and(|d| d.starts_with("sha256:")));
     }
 
     #[test]

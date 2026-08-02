@@ -45,6 +45,37 @@ pub enum EventKind {
     CrossBoundaryAlert,
 }
 
+/// Compute the content-binding digest for a set of cited observations
+/// (ADR-266 §3.1). Feeds each observation's canonical JSON, length-prefixed
+/// and in citation order, into one `sha256`.
+///
+/// Length prefixing matters: without it, two different citation lists could
+/// concatenate to the same byte stream, so an exporter could swap where one
+/// observation ends and the next begins. Order matters too — reordering
+/// citations changes the digest, because a reordered evidence list is a
+/// different claim.
+///
+/// Put the result in [`EnvironmentalEvent::evidence_digest`] *before*
+/// signing; the signature then covers the observations' content, not just
+/// their identities.
+#[must_use]
+pub fn evidence_digest(observations: &[&crate::sample::EnvSample]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(b"rucelium.evidence.v1");
+    h.update((observations.len() as u64).to_le_bytes());
+    for o in observations {
+        let bytes = serde_json::to_vec(o).unwrap_or_default();
+        h.update((bytes.len() as u64).to_le_bytes());
+        h.update(&bytes);
+    }
+    let mut s = String::from("sha256:");
+    for b in h.finalize() {
+        s.push_str(&format!("{b:02x}"));
+    }
+    s
+}
+
 /// Reference to a contributing observation (dedup key of an accepted
 /// `EnvSample`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -79,8 +110,26 @@ pub struct EnvironmentalEvent {
     pub window_end_ns: u64,
     /// Detection time, ns since Unix epoch.
     pub detected_ns: u64,
-    /// Contributing observations.
+    /// Contributing observations, by identity.
+    ///
+    /// Note what this does **not** do: an [`EvidenceRef`] pins *which*
+    /// observation was cited, never its *content*. Two different readings
+    /// from the same `(node_id, sequence)` are indistinguishable here — so
+    /// evidence refs alone cannot detect an edited value in an exported
+    /// bundle. Use [`Self::evidence_digest`] for that.
     pub evidence: Vec<EvidenceRef>,
+    /// `sha256:` digest binding the *content* of the cited observations into
+    /// the event's signature (ADR-266 §3.1: compliance evidence must be
+    /// verifiable by a third party who does not trust the exporter).
+    ///
+    /// Computed with [`evidence_digest`] over the cited observations in
+    /// citation order. Because this field is inside the signed structure,
+    /// altering any cited observation's value invalidates the event
+    /// signature — which `evidence` alone cannot achieve.
+    ///
+    /// `None` for events that make no content claim (e.g. `DeviceRevoked`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_digest: Option<String>,
     /// Detection confidence `0.0..=1.0`.
     pub confidence: f32,
     /// Human-readable summary.
@@ -146,6 +195,7 @@ mod tests {
                 sequence: 42,
             }],
             confidence: 0.9,
+            evidence_digest: None,
             message: "water level rising across 3 nodes".into(),
             signature_hex: None,
             signer_pubkey_hex: None,
@@ -177,5 +227,34 @@ mod tests {
             e.validate(),
             Err(EnvError::MissingField("evidence"))
         ));
+    }
+
+    #[test]
+    fn evidence_digest_binds_content_not_just_identity() {
+        use crate::sample::tests_support::sample_for_digest;
+        let a = sample_for_digest(7, 42, 21.5);
+        let b = sample_for_digest(7, 42, 99.9); // SAME identity, different value
+
+        // Evidence refs cannot tell these apart — that is the gap this closes.
+        let ref_a = EvidenceRef {
+            node_id: a.node_id,
+            sequence: a.sequence,
+        };
+        let ref_b = EvidenceRef {
+            node_id: b.node_id,
+            sequence: b.sequence,
+        };
+        assert_eq!(ref_a, ref_b, "evidence refs are identity-only by design");
+
+        // The digest does.
+        assert_ne!(evidence_digest(&[&a]), evidence_digest(&[&b]));
+        assert_eq!(evidence_digest(&[&a]), evidence_digest(&[&a]));
+
+        // Order is part of the claim.
+        assert_ne!(evidence_digest(&[&a, &b]), evidence_digest(&[&b, &a]));
+
+        // Length prefixing: a 2-item list never collides with a 1-item list.
+        assert_ne!(evidence_digest(&[&a, &b]), evidence_digest(&[&a]));
+        assert!(evidence_digest(&[]).starts_with("sha256:"));
     }
 }

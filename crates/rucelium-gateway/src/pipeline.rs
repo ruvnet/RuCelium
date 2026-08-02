@@ -198,6 +198,9 @@ fn maybe_alert(inner: &mut Inner, sample: &EnvSample, received_ns: u64) {
             sequence: sample.sequence,
         }],
         confidence: 0.9,
+        // Bind the cited observation CONTENT into the signature
+        // (ADR-266 §3.1), not just its (node, sequence) identity.
+        evidence_digest: Some(rucelium_core::evidence_digest(&[sample])),
         message,
         signature_hex: None,
         signer_pubkey_hex: None,

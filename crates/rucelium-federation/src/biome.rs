@@ -249,6 +249,8 @@ impl Biome {
             detected_ns: now_ns,
             evidence,
             confidence: 1.0,
+            // A revocation makes no claim about observation content.
+            evidence_digest: None,
             message: format!("device {node_id} revoked: {reason}"),
             signature_hex: None,
             signer_pubkey_hex: None,
@@ -496,6 +498,7 @@ mod tests {
     /// An unsigned event for determinism checks.
     fn unsigned_event() -> EnvironmentalEvent {
         EnvironmentalEvent {
+            evidence_digest: None,
             spec_version: SPEC_VERSION.into(),
             event_id: "evt-det".into(),
             biome_id: "biome/test-forest".into(),

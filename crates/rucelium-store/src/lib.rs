@@ -170,6 +170,7 @@ pub(crate) mod testutil {
     /// A valid event with the given id and detection time.
     pub(crate) fn event(event_id: &str, detected_ns: u64) -> EnvironmentalEvent {
         EnvironmentalEvent {
+            evidence_digest: None,
             spec_version: rucelium_core::SPEC_VERSION.into(),
             event_id: event_id.into(),
             biome_id: "biome/thames-estuary".into(),
