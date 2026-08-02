@@ -8,6 +8,14 @@ members = [
     "crates/rufield-fusion",
     "crates/rufield-bench",
     "crates/rufield-viewer",
+    "crates/rumycelium-core",
+    "crates/rumycelium-abi",
+    "crates/rumycelium-ingest",
+    "crates/rumycelium-calibration",
+    "crates/rumycelium-worldgraph",
+    "crates/rumycelium-policy",
+    "crates/rumycelium-federation",
+    "crates/rumycelium-bench",
 ]
 
 [workspace.package]
@@ -35,6 +43,14 @@ rufield-adapters = { version = "0.1.0", path = "crates/rufield-adapters" }
 rufield-fusion = { version = "0.1.0", path = "crates/rufield-fusion" }
 rufield-bench = { version = "0.1.0", path = "crates/rufield-bench" }
 rufield-viewer = { version = "0.1.0", path = "crates/rufield-viewer" }
+rumycelium-core = { version = "0.1.0", path = "crates/rumycelium-core" }
+rumycelium-abi = { version = "0.1.0", path = "crates/rumycelium-abi" }
+rumycelium-ingest = { version = "0.1.0", path = "crates/rumycelium-ingest" }
+rumycelium-calibration = { version = "0.1.0", path = "crates/rumycelium-calibration" }
+rumycelium-worldgraph = { version = "0.1.0", path = "crates/rumycelium-worldgraph" }
+rumycelium-policy = { version = "0.1.0", path = "crates/rumycelium-policy" }
+rumycelium-federation = { version = "0.1.0", path = "crates/rumycelium-federation" }
+rumycelium-bench = { version = "0.1.0", path = "crates/rumycelium-bench" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

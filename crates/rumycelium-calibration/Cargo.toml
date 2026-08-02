@@ -1,0 +1,18 @@
+[package]
+name = "rumycelium-calibration"
+version.workspace = true
+edition.workspace = true
+description = "RuMycelium calibration lineage, drift detection, and sensor quarantine — never silent correction (ADR-264 §12)"
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+keywords = ["environmental", "calibration", "drift", "quality"]
+categories = ["science"]
+
+[dependencies]
+rumycelium-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
