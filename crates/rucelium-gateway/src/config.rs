@@ -50,6 +50,11 @@ pub struct GatewayConfig {
     pub retention_check_secs: u64,
     /// Peer federation poll interval in milliseconds (short in tests).
     pub federation_poll_ms: u64,
+    /// Interval of the **mandatory** `sync_since` backfill backstop, in
+    /// milliseconds (ADR-269 §3). `None` inherits [`Self::federation_poll_ms`],
+    /// so the ADR-265 §4 behaviour is the default; set it explicitly to slow
+    /// the backstop down once push is carrying the latency-critical traffic.
+    pub federation_backfill_ms: Option<u64>,
     /// The actuator id the biome owner grants `agent/flood` authority over
     /// (ADR-264 §6: actuator authority never leaves the biome owner).
     pub actuator_id: String,
@@ -71,6 +76,7 @@ impl Default for GatewayConfig {
             sim_interval_ms: DEFAULT_SIM_INTERVAL_MS,
             retention_check_secs: DEFAULT_RETENTION_CHECK_SECS,
             federation_poll_ms: DEFAULT_FEDERATION_POLL_MS,
+            federation_backfill_ms: None,
             actuator_id: DEFAULT_ACTUATOR_ID.to_string(),
             fsync: DEFAULT_FSYNC,
         }
@@ -78,6 +84,15 @@ impl Default for GatewayConfig {
 }
 
 impl GatewayConfig {
+    /// Interval of the ADR-269 §3 backfill backstop, in milliseconds:
+    /// [`Self::federation_backfill_ms`] when set, otherwise the ADR-265 §4
+    /// [`Self::federation_poll_ms`].
+    #[must_use]
+    pub fn federation_backfill_ms(&self) -> u64 {
+        self.federation_backfill_ms
+            .unwrap_or(self.federation_poll_ms)
+    }
+
     /// Parse CLI arguments (without the program name). Unknown flags and
     /// malformed values are hard errors — the daemon never guesses.
     pub fn from_args(args: Vec<String>) -> Result<Self, String> {
@@ -105,6 +120,12 @@ impl GatewayConfig {
                 "--federation-poll-ms" => {
                     config.federation_poll_ms =
                         parse_num(&value("--federation-poll-ms")?, "--federation-poll-ms")?;
+                }
+                "--federation-backfill-ms" => {
+                    config.federation_backfill_ms = Some(parse_num(
+                        &value("--federation-backfill-ms")?,
+                        "--federation-backfill-ms",
+                    )?);
                 }
                 "--actuator" => config.actuator_id = value("--actuator")?,
                 "--fsync" => config.fsync = parse_num(&value("--fsync")?, "--fsync")?,
@@ -143,8 +164,25 @@ mod tests {
         assert_eq!(c.sim_interval_ms, 1000);
         assert_eq!(c.retention_check_secs, 3600);
         assert_eq!(c.federation_poll_ms, 30_000);
+        // ADR-269 §3: the backstop defaults to the ADR-265 §4 poll interval.
+        assert_eq!(c.federation_backfill_ms, None);
+        assert_eq!(c.federation_backfill_ms(), 30_000);
         assert_eq!(c.actuator_id, "sluice-gate-1");
         assert!(c.fsync, "the daemon fsyncs accepted appends by default");
+    }
+
+    #[test]
+    fn backfill_interval_overrides_the_poll_interval_when_set() {
+        let c = GatewayConfig::from_args(args(&[
+            "--federation-poll-ms",
+            "200",
+            "--federation-backfill-ms",
+            "60000",
+        ]))
+        .unwrap();
+        assert_eq!(c.federation_poll_ms, 200);
+        assert_eq!(c.federation_backfill_ms, Some(60_000));
+        assert_eq!(c.federation_backfill_ms(), 60_000);
     }
 
     #[test]

@@ -50,13 +50,20 @@ pub mod net;
 pub mod pipeline;
 pub mod simulate;
 pub mod state;
+pub mod transport;
+#[cfg(feature = "quic")]
+pub mod transport_quic;
 
 pub use config::GatewayConfig;
 pub use control::run_proposal;
 pub use pipeline::{process_datagram, ProcessOutcome};
-pub use state::{ControlStats, GatewayState, Inner, PeerSummary};
+pub use state::{ControlStats, GatewayState, Inner, KnownPeer, PeerSummary, PushStats};
+pub use transport::{
+    FederationArtifact, FederationTransport, HttpPollTransport, PeerRef, TransportError,
+};
 
 use rucelium_core::DataClass;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinHandle;
 
@@ -86,9 +93,25 @@ pub async fn spawn_gateway(config: GatewayConfig) -> Result<GatewayHandle, Strin
 /// Like [`spawn_gateway`], but over a pre-built [`GatewayState`] — lets
 /// tests provision devices deterministically before any traffic or
 /// federation poll can race them.
+///
+/// Federates over [`HttpPollTransport`], the always-available default
+/// (ADR-269 §3). Use [`spawn_gateway_with_transport`] to federate over the
+/// optional QUIC transport instead.
 pub async fn spawn_gateway_with_state(
     state: GatewayState,
     config: GatewayConfig,
+) -> Result<GatewayHandle, String> {
+    let transport = Arc::new(HttpPollTransport::new()?);
+    spawn_gateway_with_transport(state, config, transport).await
+}
+
+/// Like [`spawn_gateway_with_state`], but over a caller-chosen federation
+/// transport (ADR-269 §3: "the transport becomes swappable, so … anything
+/// else can be added later without touching federation logic").
+pub async fn spawn_gateway_with_transport(
+    state: GatewayState,
+    config: GatewayConfig,
+    transport: Arc<dyn FederationTransport>,
 ) -> Result<GatewayHandle, String> {
     let udp = tokio::net::UdpSocket::bind(("0.0.0.0", config.udp_port))
         .await
@@ -121,11 +144,22 @@ pub async fn spawn_gateway_with_state(
     )));
 
     if !config.peers.is_empty() {
-        tasks.push(tokio::spawn(federation::run_federation(
-            state.clone(),
-            config.peers.clone(),
-            config.federation_poll_ms,
-        )));
+        // Subscribe *before* spawning, so an artifact minted between here
+        // and the task's first poll is still pushed (ADR-269 §3).
+        let mut push_rx = state.push_tx.subscribe();
+        let fed_state = state.clone();
+        let peers = config.peers.clone();
+        let backfill_ms = config.federation_backfill_ms();
+        tasks.push(tokio::spawn(async move {
+            federation::run_federation_with_receiver(
+                fed_state,
+                transport,
+                peers,
+                backfill_ms,
+                &mut push_rx,
+            )
+            .await;
+        }));
     }
 
     if config.simulate > 0 {

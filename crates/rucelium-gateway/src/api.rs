@@ -17,7 +17,9 @@
 //! the durable duplicate-command journal before anything executes.
 
 use crate::control::{actuator_proposal, run_proposal};
+use crate::federation::{accept_artifact, ArtifactEffect, ArtifactRejection};
 use crate::state::{now_ns, GatewayState};
+use crate::transport::FederationArtifact;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
@@ -73,6 +75,7 @@ pub fn router(state: GatewayState) -> Router {
         .route("/api/federation/summary", get(fed_summary))
         .route("/api/federation/revocations", get(fed_revocations))
         .route("/api/federation/peers", get(fed_peers))
+        .route("/api/federation/announce", post(fed_announce))
         .route("/api/admin/revoke/:node_id", post(admin_revoke))
         .route("/api/admin/command", post(admin_command))
         .with_state(state)
@@ -110,6 +113,14 @@ async fn stats(State(state): State<GatewayState>) -> Json<Value> {
         "quarantined_nodes": inner.drift.quarantined(),
         "applied_peer_revocations": inner.applied_peer_revocations,
         "peer_summaries": inner.peer_summaries.len(),
+        // Push federation (ADR-269 §3), flat for scriptability and grouped
+        // for readability.
+        "pushes_sent": inner.push.pushes_sent,
+        "pushes_received": inner.push.pushes_received,
+        "push_failures": inner.push.push_failures,
+        "backfills": inner.push.backfills,
+        "push": inner.push,
+        "known_peers": inner.known_peers.len(),
     }))
 }
 
