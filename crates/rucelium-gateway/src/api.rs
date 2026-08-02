@@ -249,10 +249,73 @@ async fn fed_peers(State(state): State<GatewayState>) -> Json<Value> {
     Json(json!(inner.peer_summaries))
 }
 
+/// `POST /api/federation/announce` — a peer **pushes** one signed artifact
+/// at us (ADR-269 §3). This is the HTTP half of push federation: the peer
+/// does not wait for our backfill timer, so a revocation propagates at link
+/// speed instead of polling speed.
+///
+/// The body is verified by exactly the same gate as polled data
+/// ([`accept_artifact`], ADR-269 §4 normative): signature, `biome_id → key`
+/// identity binding against the key we learned from that peer, and
+/// `event_id` dedup. **Unverifiable artifacts get a 4xx and are not
+/// applied** — being pushed buys an artifact nothing.
+///
+/// * `200` — verified and applied (or stored); `pushes_received` bumped.
+/// * `202` — verified, but no state change (duplicate revocation, or a node
+///   we have not provisioned; a later backfill re-offers it).
+/// * `403` — unsigned, unknown biome, or signer ≠ registered key.
+/// * `400` — the signature did not verify.
+async fn fed_announce(
+    State(state): State<GatewayState>,
+    Json(artifact): Json<FederationArtifact>,
+) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
+    let mut inner = state.inner.lock().await;
+    match accept_artifact(&mut inner, &artifact) {
+        Ok(effect) => {
+            inner.push.pushes_received += 1;
+            let applied = matches!(effect, ArtifactEffect::RevocationApplied);
+            Ok((
+                StatusCode::OK,
+                Json(json!({
+                    "ok": true,
+                    "applied": applied,
+                    "effect": match effect {
+                        ArtifactEffect::SummaryStored => "summary_stored",
+                        ArtifactEffect::RevocationApplied => "revocation_applied",
+                    },
+                })),
+            ))
+        }
+        // Verified, nothing to do. Accepted, not applied — the peer should
+        // not treat this as a delivery failure.
+        Err(ArtifactRejection::NoEffect) => Ok((
+            StatusCode::ACCEPTED,
+            Json(json!({ "ok": true, "applied": false, "effect": "no_effect" })),
+        )),
+        Err(e) => {
+            let status = match e {
+                ArtifactRejection::BadSignature => StatusCode::BAD_REQUEST,
+                _ => StatusCode::FORBIDDEN,
+            };
+            Err((
+                status,
+                Json(json!({ "ok": false, "applied": false, "error": e.to_string() })),
+            ))
+        }
+    }
+}
+
 /// `POST /api/admin/revoke/{node_id}` — revoke a device locally: registry
 /// revocation (immediate ingest rejection), biome revocation, and a
 /// biome-signed `DeviceRevoked` event appended to the event store — the
 /// record federation peers pick up.
+///
+/// **ADR-269 §3 (push on revocation)**: the signed event is queued for
+/// immediate announcement to every configured peer before this handler
+/// returns. It does *not* wait for the backfill timer, because revocation
+/// latency is a security property and polling caps it at the interval. The
+/// push is best-effort by design; the mandatory `sync_since` backstop
+/// converges any peer that missed it.
 ///
 /// **UNAUTHENTICATED in v0.1** — see the module-level SECURITY note.
 async fn admin_revoke(
@@ -265,9 +328,12 @@ async fn admin_revoke(
         .biome
         .revoke_device(node_id, now_ns(), "admin revocation");
     inner.events.append(&event).map_err(internal)?;
+    drop(inner);
+    let pushed_to = state.announce_local(FederationArtifact::Event(event.clone()));
     Ok(Json(json!({
         "node_id": node_id,
         "registry_revoked": registry_revoked,
+        "pushed": pushed_to > 0,
         "event": event,
     })))
 }
