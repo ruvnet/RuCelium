@@ -979,6 +979,7 @@ dependencies = [
  "rucelium-core",
  "rucelium-federation",
  "rucelium-ingest",
+ "rucelium-policy",
  "rucelium-store",
  "rucelium-transport",
  "rucelium-worldgraph",
@@ -996,6 +997,17 @@ dependencies = [
  "rucelium-core",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "rucelium-notary"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "rucelium-core",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

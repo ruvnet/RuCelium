@@ -19,6 +19,7 @@ members = [
     "crates/rucelium-store",
     "crates/rucelium-transport",
     "crates/rucelium-gateway",
+    "crates/rucelium-notary",
     "examples",
 ]
 
@@ -58,6 +59,7 @@ rucelium-bench = { version = "0.1.0", path = "crates/rucelium-bench" }
 rucelium-store = { version = "0.1.0", path = "crates/rucelium-store" }
 rucelium-transport = { version = "0.1.0", path = "crates/rucelium-transport" }
 rucelium-gateway = { version = "0.1.0", path = "crates/rucelium-gateway" }
+rucelium-notary = { version = "0.1.0", path = "crates/rucelium-notary" }
 rucelium-examples = { version = "0.1.0", path = "examples" }
 
 [workspace.lints.rust]

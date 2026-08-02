@@ -1,0 +1,20 @@
+[package]
+name = "rucelium-notary"
+version.workspace = true
+edition.workspace = true
+description = "RuCelium long-term provenance: domain-separated Merkle notarization with inclusion proofs and algorithm-agile root signing, amortizing post-quantum signature cost to bytes per observation (ADR-267)"
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+keywords = ["provenance", "merkle", "post-quantum", "archival", "environmental"]
+categories = ["science", "cryptography"]
+
+[dependencies]
+rucelium-core = { workspace = true }
+sha2 = { workspace = true }
+ed25519-dalek = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
