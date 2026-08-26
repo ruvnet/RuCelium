@@ -35,19 +35,28 @@ use serde::{Deserialize, Serialize};
 
 /// Shape of the upstream `GET /api/field` response (ADR-262 P3).
 ///
-/// The viewer only needs `events`; `signer_pubkey` / `dev_signing_key` are
+/// The viewer only needs `events`; `signer_pubkey_hex` / `dev_signing_key` are
 /// accepted (and surfaced) but are not trusted blindly — verification is done
 /// per-event against each event's own embedded `signer_pubkey_hex`.
+///
+/// Both wire names and `dev_signing_key`'s type were previously wrong for
+/// RuView's actual `wifi-densepose-sensing-server` response
+/// (`rufield_surface::api_field`): it sends the key as `signer_pubkey_hex`
+/// (this crate expected `signer_pubkey`, silently dropped via
+/// `#[serde(default)]`) and `dev_signing_key` as a JSON **bool**, not a
+/// string — that second mismatch was fatal, since a type error on decode
+/// fails the *whole* payload and the ring's `events` never got parsed at all.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ApiFieldPayload {
     /// The bounded ring of field events the upstream is currently serving.
     pub events: Vec<FieldEvent>,
     /// The upstream's advertised signer public key (hex), if any. Informational.
-    #[serde(default)]
+    #[serde(default, rename = "signer_pubkey_hex")]
     pub signer_pubkey: Option<String>,
-    /// The upstream's advertised dev signing key id, if any. Informational.
+    /// Whether the upstream is signing with its deterministic dev/fallback
+    /// key rather than an operator-provisioned one. Informational.
     #[serde(default)]
-    pub dev_signing_key: Option<String>,
+    pub dev_signing_key: Option<bool>,
 }
 
 /// The result of ingesting one batch of upstream events: a renderable
@@ -185,10 +194,14 @@ mod tests {
     #[test]
     fn api_payload_deserializes_verifies_and_renders() {
         let events = real_signed_events(3);
+        // Field names/types mirror RuView's actual `/api/field` response
+        // (`rufield_surface::api_field`), not a guessed shape — this is the
+        // regression test for the wire-format mismatch that made every
+        // decode of a real upstream payload fail.
         let payload = serde_json::json!({
             "events": events,
-            "signer_pubkey": "deadbeef",
-            "dev_signing_key": "dev-key-1",
+            "signer_pubkey_hex": "deadbeef",
+            "dev_signing_key": false,
         })
         .to_string();
 
