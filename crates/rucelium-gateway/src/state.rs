@@ -9,7 +9,7 @@
 
 use crate::config::GatewayConfig;
 use crate::journal;
-use crate::rf_bridge::{RfEntry, RfIngestStats};
+use crate::rf_bridge::{InferenceSnapshot, RfEntry, RfIngestStats};
 use rufield_fusion::RuFieldFusion;
 use rucelium_calibration::{
     AuthorityRegistry as CalibrationAuthorities, CalibrationAuthority, CalibrationError,
@@ -198,6 +198,10 @@ pub struct Inner {
     /// Needs no biome/WorldGraph pairing — see `rf_bridge` for why that's a
     /// deliberately different, still-unbuilt kind of fusion.
     pub rf_fusion: RuFieldFusion,
+    /// Bounded in-memory history of inference snapshots (`rf_bridge` module
+    /// docs) — survives across polls, not across a restart; RF inferences
+    /// have no biome `node_id`/`sequence` to durably cite yet.
+    pub rf_inference_history: VecDeque<InferenceSnapshot>,
 }
 
 impl Inner {
@@ -306,6 +310,7 @@ impl Inner {
             rf_stats: RfIngestStats::default(),
             rf_upstream: config.rf_upstream.clone(),
             rf_fusion: RuFieldFusion::new(),
+            rf_inference_history: VecDeque::new(),
         })
     }
 

@@ -127,13 +127,16 @@ async fn stats(State(state): State<GatewayState>) -> Json<Value> {
 
 /// `GET /api/rf-context` — the RuView RF-context bridge's state (ADR-264 §8,
 /// see `rf_bridge`): the configured upstream (if any), ingest counters, the
-/// bounded recent ring, and the current within-RF-domain fused inferences
+/// bounded recent ring, the current within-RF-domain fused inferences
 /// (`rf_bridge::current_inferences` — RuField's own room-state rules over
-/// this upstream's own verified events; needs no external pairing). Each
-/// ring entry is honestly tagged `verified` — an unverified event is visible
-/// here but excluded from fusion, never silently dropped or upgraded.
-/// `fused_into_worldgraph` is always `false`: this bridge does not (yet)
-/// correlate RF context against any biome environmental sample — see
+/// this upstream's own verified events; needs no external pairing), and a
+/// bounded history of past inference snapshots so a transient inference is
+/// still visible after its own TTL expires (in-memory only — does not
+/// survive a restart; see [`crate::rf_bridge::InferenceSnapshot`] docs for
+/// why not durable yet). Each ring entry is honestly tagged `verified` — an unverified event
+/// is visible here but excluded from fusion, never silently dropped or
+/// upgraded. `fused_into_worldgraph` is always `false`: this bridge does not
+/// (yet) correlate RF context against any biome environmental sample — see
 /// `rf_bridge`'s module docs for why that's a separate, still-unbuilt
 /// decision. Empty and idle when `--rf-upstream` was not set.
 async fn rf_context(State(state): State<GatewayState>) -> Json<Value> {
@@ -144,6 +147,7 @@ async fn rf_context(State(state): State<GatewayState>) -> Json<Value> {
         "stats": inner.rf_stats,
         "recent": inner.rf_recent.iter().collect::<Vec<_>>(),
         "room_state_inferences": crate::rf_bridge::current_inferences(&inner.rf_fusion),
+        "inference_history": inner.rf_inference_history.iter().collect::<Vec<_>>(),
     }))
 }
 

@@ -53,6 +53,11 @@ use crate::state::{now_ns, GatewayState};
 /// a live tap, not a store).
 pub const RF_RECENT_CAPACITY: usize = 64;
 
+/// Bounded ring size for retained inference snapshots. Smaller than
+/// [`RF_RECENT_CAPACITY`] because each snapshot carries every currently-live
+/// inference (typically a handful), not one event.
+pub const INFERENCE_HISTORY_CAPACITY: usize = 32;
+
 /// Default poll interval for `GET <upstream>/api/field`, matching
 /// `rufield-viewer`'s own default.
 pub const DEFAULT_RF_POLL_MS: u64 = 500;
@@ -93,6 +98,26 @@ pub struct RfIngestStats {
     pub events_other_modality: u64,
 }
 
+/// One captured moment of the fusion engine's current inferences, retained
+/// so a `person_present` (or any other) inference that fired between two
+/// polls is not simply lost the moment its 2-second TTL expires. This is the
+/// gap between how RF inferences behaved before this struct existed (only
+/// ever computed live, on request, from whatever is in the engine's window
+/// *right now*) and how every other durable thing in this gateway behaves
+/// (`ObservationStore`, `EventStore`) — RF inferences are still NOT written
+/// to either of those (they are not `EnvSample`/`EnvironmentalEvent`s and
+/// have no biome `node_id`/`sequence` to cite — the same structural gap
+/// `fuse_rf_context` ran into), so this is in-memory history, not disk
+/// durability. It survives across polls; it does not survive a restart.
+#[derive(Debug, Clone, Serialize)]
+pub struct InferenceSnapshot {
+    /// When this snapshot was captured, ns since Unix epoch (the poll's
+    /// `received_ns`, not any individual inference's own `produced_ns`).
+    pub captured_ns: u64,
+    /// Every inference the engine reported live at capture time.
+    pub inferences: Vec<rufield_core::FieldInference>,
+}
+
 /// Shape of RuView's `GET /api/field` response that this bridge actually
 /// needs. Deliberately declares **only** `events`: the response also carries
 /// `signer_pubkey_hex` and `dev_signing_key`, but their exact shape is
@@ -109,15 +134,20 @@ struct ApiFieldPayload {
 /// polled `FieldEvent`s into the bounded ring, the counters, and the
 /// within-RF-domain fusion engine (module docs: this is the fusion that
 /// needs no external pairing, so it runs unconditionally on every verified
-/// event).
+/// event) — and, only when this batch actually fed the engine something new,
+/// capture a snapshot of its current inferences into `history` so a
+/// transient inference outlives its own TTL instead of vanishing the moment
+/// nobody happens to be polling `/api/rf-context`.
 pub fn ingest_events(
     recent: &mut VecDeque<RfEntry>,
     stats: &mut RfIngestStats,
     fusion: &mut RuFieldFusion,
+    history: &mut VecDeque<InferenceSnapshot>,
     events: &[FieldEvent],
     received_ns: u64,
 ) {
     stats.polls += 1;
+    let mut fed_engine = false;
     for ev in events {
         stats.events_received += 1;
         let verified = rufield_provenance::is_fusable(ev);
@@ -127,6 +157,7 @@ pub fn ingest_events(
             // the fusion engine. `ingest` itself re-checks §11 fusability
             // (belt-and-suspenders), so forged data cannot reach it either way.
             let _ = fusion.ingest(ev.clone());
+            fed_engine = true;
         } else {
             stats.events_unverified += 1;
         }
@@ -143,6 +174,19 @@ pub fn ingest_events(
             }
             None => stats.events_other_modality += 1,
         }
+    }
+    // Only capture a snapshot when this batch actually changed the engine's
+    // state — an empty or all-unverified poll would just re-record the same
+    // stale inferences (or an empty vec) under a new timestamp, which is
+    // noise, not history.
+    if fed_engine {
+        if history.len() == INFERENCE_HISTORY_CAPACITY {
+            history.pop_front();
+        }
+        history.push_back(InferenceSnapshot {
+            captured_ns: received_ns,
+            inferences: current_inferences(fusion),
+        });
     }
 }
 
@@ -208,6 +252,7 @@ pub async fn run_rf_ingest(state: GatewayState, upstream: String, poll_ms: u64) 
                     &mut inner.rf_recent,
                     &mut inner.rf_stats,
                     &mut inner.rf_fusion,
+                    &mut inner.rf_inference_history,
                     &events,
                     received_ns,
                 );
@@ -327,9 +372,10 @@ mod tests {
         let mut recent = VecDeque::new();
         let mut stats = RfIngestStats::default();
         let mut fusion = RuFieldFusion::new();
+        let mut history: VecDeque<InferenceSnapshot> = VecDeque::new();
         let ev = wifi_csi_event("node-1", true);
 
-        ingest_events(&mut recent, &mut stats, &mut fusion, std::slice::from_ref(&ev), 5_000);
+        ingest_events(&mut recent, &mut stats, &mut fusion, &mut history, std::slice::from_ref(&ev), 5_000);
 
         assert_eq!(recent.len(), 1);
         assert!(recent[0].verified);
@@ -347,9 +393,10 @@ mod tests {
         let mut recent = VecDeque::new();
         let mut stats = RfIngestStats::default();
         let mut fusion = RuFieldFusion::new();
+        let mut history: VecDeque<InferenceSnapshot> = VecDeque::new();
         let ev = wifi_csi_event("node-2", false);
 
-        ingest_events(&mut recent, &mut stats, &mut fusion, std::slice::from_ref(&ev), 1);
+        ingest_events(&mut recent, &mut stats, &mut fusion, &mut history, std::slice::from_ref(&ev), 1);
 
         assert_eq!(recent.len(), 1, "unverified events are still visible, not dropped");
         assert!(!recent[0].verified);
@@ -362,9 +409,10 @@ mod tests {
         let mut recent = VecDeque::new();
         let mut stats = RfIngestStats::default();
         let mut fusion = RuFieldFusion::new();
+        let mut history: VecDeque<InferenceSnapshot> = VecDeque::new();
         let ev = other_modality_event();
 
-        ingest_events(&mut recent, &mut stats, &mut fusion, std::slice::from_ref(&ev), 1);
+        ingest_events(&mut recent, &mut stats, &mut fusion, &mut history, std::slice::from_ref(&ev), 1);
 
         assert!(recent.is_empty());
         assert_eq!(stats.events_other_modality, 1);
@@ -376,9 +424,10 @@ mod tests {
         let mut recent = VecDeque::new();
         let mut stats = RfIngestStats::default();
         let mut fusion = RuFieldFusion::new();
+        let mut history: VecDeque<InferenceSnapshot> = VecDeque::new();
         for i in 0..(RF_RECENT_CAPACITY + 10) {
             let ev = wifi_csi_event(&format!("node-{i}"), true);
-            ingest_events(&mut recent, &mut stats, &mut fusion, std::slice::from_ref(&ev), i as u64);
+            ingest_events(&mut recent, &mut stats, &mut fusion, &mut history, std::slice::from_ref(&ev), i as u64);
         }
         assert_eq!(recent.len(), RF_RECENT_CAPACITY);
         // Oldest entries evicted first: the front should be from late in the
@@ -395,9 +444,10 @@ mod tests {
         let mut recent = VecDeque::new();
         let mut stats = RfIngestStats::default();
         let mut fusion = RuFieldFusion::new();
+        let mut history: VecDeque<InferenceSnapshot> = VecDeque::new();
         let ev = wifi_csi_event("node-fused", true);
 
-        ingest_events(&mut recent, &mut stats, &mut fusion, std::slice::from_ref(&ev), 1);
+        ingest_events(&mut recent, &mut stats, &mut fusion, &mut history, std::slice::from_ref(&ev), 1);
 
         let inferences = current_inferences(&fusion);
         assert!(
@@ -412,15 +462,83 @@ mod tests {
         let mut recent = VecDeque::new();
         let mut stats = RfIngestStats::default();
         let mut fusion = RuFieldFusion::new();
+        let mut history: VecDeque<InferenceSnapshot> = VecDeque::new();
         let ev = wifi_csi_event("node-forged", false);
 
-        ingest_events(&mut recent, &mut stats, &mut fusion, std::slice::from_ref(&ev), 1);
+        ingest_events(&mut recent, &mut stats, &mut fusion, &mut history, std::slice::from_ref(&ev), 1);
 
         let inferences = current_inferences(&fusion);
         assert!(
             inferences.is_empty(),
             "an unverified event must never influence a fused inference, got: {inferences:?}"
         );
+    }
+
+    #[test]
+    fn a_verified_batch_captures_an_inference_snapshot() {
+        let mut recent = VecDeque::new();
+        let mut stats = RfIngestStats::default();
+        let mut fusion = RuFieldFusion::new();
+        let mut history: VecDeque<InferenceSnapshot> = VecDeque::new();
+        let ev = wifi_csi_event("node-hist", true);
+
+        ingest_events(&mut recent, &mut stats, &mut fusion, &mut history, std::slice::from_ref(&ev), 42);
+
+        assert_eq!(history.len(), 1, "a batch that fed the engine must be captured");
+        let snap = &history[0];
+        assert_eq!(snap.captured_ns, 42);
+        assert!(
+            snap.inferences.iter().any(|i| i.label == "person_present"),
+            "the snapshot must carry the inference the batch actually produced"
+        );
+    }
+
+    #[test]
+    fn an_empty_or_all_unverified_batch_is_not_recorded_as_history_noise() {
+        let mut recent = VecDeque::new();
+        let mut stats = RfIngestStats::default();
+        let mut fusion = RuFieldFusion::new();
+        let mut history: VecDeque<InferenceSnapshot> = VecDeque::new();
+
+        // Empty batch (e.g. RuView's ring had nothing new this poll).
+        ingest_events(&mut recent, &mut stats, &mut fusion, &mut history, &[], 1);
+        assert!(history.is_empty(), "an empty poll must not add a snapshot");
+
+        // All-unverified batch never fed the engine either.
+        let unsigned = wifi_csi_event("node-x", false);
+        ingest_events(
+            &mut recent,
+            &mut stats,
+            &mut fusion,
+            &mut history,
+            std::slice::from_ref(&unsigned),
+            2,
+        );
+        assert!(
+            history.is_empty(),
+            "a batch that never fed the engine must not add a snapshot either"
+        );
+    }
+
+    #[test]
+    fn inference_history_is_bounded_and_drops_oldest() {
+        let mut recent = VecDeque::new();
+        let mut stats = RfIngestStats::default();
+        let mut fusion = RuFieldFusion::new();
+        let mut history: VecDeque<InferenceSnapshot> = VecDeque::new();
+        for i in 0..(INFERENCE_HISTORY_CAPACITY + 5) {
+            let ev = wifi_csi_event(&format!("node-{i}"), true);
+            ingest_events(
+                &mut recent,
+                &mut stats,
+                &mut fusion,
+                &mut history,
+                std::slice::from_ref(&ev),
+                i as u64,
+            );
+        }
+        assert_eq!(history.len(), INFERENCE_HISTORY_CAPACITY);
+        assert_eq!(history.back().unwrap().captured_ns, (INFERENCE_HISTORY_CAPACITY + 4) as u64);
     }
 
     #[test]
