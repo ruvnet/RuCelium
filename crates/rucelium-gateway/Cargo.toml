@@ -30,6 +30,8 @@ rucelium-worldgraph = { workspace = true }
 rucelium-federation = { workspace = true }
 rucelium-policy = { workspace = true }
 rucelium-store = { workspace = true }
+rufield-core = { workspace = true }
+rufield-provenance = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

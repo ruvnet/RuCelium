@@ -24,6 +24,9 @@ pub const DEFAULT_ACTUATOR_ID: &str = "sluice-gate-1";
 /// Default durability mode for the durable stores: the daemon fsyncs every
 /// accepted append, so an accepted record survives power loss.
 pub const DEFAULT_FSYNC: bool = true;
+/// Default poll interval for the RuView RF-context bridge (ADR-264 §8),
+/// matching `rufield-viewer`'s own default `/api/field` poll cadence.
+pub const DEFAULT_RF_POLL_MS: u64 = 500;
 
 /// Runtime configuration of one gateway daemon instance.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,6 +64,13 @@ pub struct GatewayConfig {
     /// Durability mode for `ObservationStore` / `EventStore`: `true` fsyncs
     /// every accepted append before it is acknowledged.
     pub fsync: bool,
+    /// Base URL of a RuView `wifi-densepose-sensing-server` to poll for RF
+    /// context (ADR-264 §8). `None` (default) disables the bridge entirely —
+    /// this is opt-in, not a dependency the gateway assumes exists.
+    pub rf_upstream: Option<String>,
+    /// Poll interval for the RF-context bridge, in milliseconds. Unused when
+    /// `rf_upstream` is `None`.
+    pub rf_poll_ms: u64,
 }
 
 impl Default for GatewayConfig {
@@ -79,6 +89,8 @@ impl Default for GatewayConfig {
             federation_backfill_ms: None,
             actuator_id: DEFAULT_ACTUATOR_ID.to_string(),
             fsync: DEFAULT_FSYNC,
+            rf_upstream: None,
+            rf_poll_ms: DEFAULT_RF_POLL_MS,
         }
     }
 }
@@ -129,6 +141,10 @@ impl GatewayConfig {
                 }
                 "--actuator" => config.actuator_id = value("--actuator")?,
                 "--fsync" => config.fsync = parse_num(&value("--fsync")?, "--fsync")?,
+                "--rf-upstream" => config.rf_upstream = Some(value("--rf-upstream")?),
+                "--rf-poll-ms" => {
+                    config.rf_poll_ms = parse_num(&value("--rf-poll-ms")?, "--rf-poll-ms")?;
+                }
                 unknown => return Err(format!("unknown flag {unknown}")),
             }
         }
@@ -169,6 +185,8 @@ mod tests {
         assert_eq!(c.federation_backfill_ms(), 30_000);
         assert_eq!(c.actuator_id, "sluice-gate-1");
         assert!(c.fsync, "the daemon fsyncs accepted appends by default");
+        assert_eq!(c.rf_upstream, None, "the RF bridge is opt-in, off by default");
+        assert_eq!(c.rf_poll_ms, 500);
     }
 
     #[test]
@@ -210,6 +228,10 @@ mod tests {
             "weir-3",
             "--fsync",
             "false",
+            "--rf-upstream",
+            "http://127.0.0.1:8080",
+            "--rf-poll-ms",
+            "250",
         ]))
         .unwrap();
         assert_eq!(c.biome_id, "biome/x");
@@ -223,6 +245,8 @@ mod tests {
         assert_eq!(c.federation_poll_ms, 200);
         assert_eq!(c.actuator_id, "weir-3");
         assert!(!c.fsync);
+        assert_eq!(c.rf_upstream, Some("http://127.0.0.1:8080".to_string()));
+        assert_eq!(c.rf_poll_ms, 250);
     }
 
     #[test]

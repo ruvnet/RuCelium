@@ -78,6 +78,7 @@ pub fn router(state: GatewayState) -> Router {
         .route("/api/federation/announce", post(fed_announce))
         .route("/api/admin/revoke/:node_id", post(admin_revoke))
         .route("/api/admin/command", post(admin_command))
+        .route("/api/rf-context", get(rf_context))
         .with_state(state)
 }
 
@@ -121,6 +122,22 @@ async fn stats(State(state): State<GatewayState>) -> Json<Value> {
         "backfills": inner.push.backfills,
         "push": inner.push,
         "known_peers": inner.known_peers.len(),
+    }))
+}
+
+/// `GET /api/rf-context` — the RuView RF-context bridge's state (ADR-264 §8,
+/// see `rf_bridge`): the configured upstream (if any), ingest counters, and
+/// the bounded recent ring. Each entry is honestly tagged `verified` — an
+/// unverified event is visible here, never silently dropped or upgraded, and
+/// none of this is fused into the WorldGraph (`rf_bridge`'s module docs
+/// explain why not yet). Empty and idle when `--rf-upstream` was not set.
+async fn rf_context(State(state): State<GatewayState>) -> Json<Value> {
+    let inner = state.inner.lock().await;
+    Json(json!({
+        "upstream": inner.rf_upstream,
+        "fused": false,
+        "stats": inner.rf_stats,
+        "recent": inner.rf_recent.iter().collect::<Vec<_>>(),
     }))
 }
 

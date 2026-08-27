@@ -985,6 +985,8 @@ dependencies = [
  "rucelium-store",
  "rucelium-transport",
  "rucelium-worldgraph",
+ "rufield-core",
+ "rufield-provenance",
  "rustls",
  "serde",
  "serde_json",

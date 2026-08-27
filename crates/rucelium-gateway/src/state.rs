@@ -9,6 +9,7 @@
 
 use crate::config::GatewayConfig;
 use crate::journal;
+use crate::rf_bridge::{RfEntry, RfIngestStats};
 use rucelium_calibration::{
     AuthorityRegistry as CalibrationAuthorities, CalibrationAuthority, CalibrationError,
     CalibrationSigner, CalibrationStore, Calibrator, DriftDetector,
@@ -24,7 +25,7 @@ use rucelium_store::{EventStore, ObservationStore};
 use rucelium_transport::Reassembler;
 use rucelium_worldgraph::WorldGraph;
 use serde::Serialize;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -180,6 +181,17 @@ pub struct Inner {
     pub control: ControlStats,
     /// Path of the durable command-phase journal (`commands.jsonl`).
     pub command_journal: PathBuf,
+
+    // --- RuView RF-context bridge (ADR-264 §8, `rf_bridge`) ---
+    /// Bounded ring of recently ingested, verification-tagged RF context.
+    /// Empty and never populated unless `--rf-upstream` is configured.
+    pub rf_recent: VecDeque<RfEntry>,
+    /// RF-context ingest counters.
+    pub rf_stats: RfIngestStats,
+    /// The configured RF upstream, if any — retained here (not just in
+    /// `GatewayConfig`, which the running daemon doesn't otherwise keep) so
+    /// `GET /api/rf-context` can report what it's actually polling.
+    pub rf_upstream: Option<String>,
 }
 
 impl Inner {
@@ -284,6 +296,9 @@ impl Inner {
             receipts: Vec::new(),
             control: ControlStats::default(),
             command_journal,
+            rf_recent: VecDeque::new(),
+            rf_stats: RfIngestStats::default(),
+            rf_upstream: config.rf_upstream.clone(),
         })
     }
 
