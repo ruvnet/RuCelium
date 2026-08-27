@@ -126,18 +126,24 @@ async fn stats(State(state): State<GatewayState>) -> Json<Value> {
 }
 
 /// `GET /api/rf-context` — the RuView RF-context bridge's state (ADR-264 §8,
-/// see `rf_bridge`): the configured upstream (if any), ingest counters, and
-/// the bounded recent ring. Each entry is honestly tagged `verified` — an
-/// unverified event is visible here, never silently dropped or upgraded, and
-/// none of this is fused into the WorldGraph (`rf_bridge`'s module docs
-/// explain why not yet). Empty and idle when `--rf-upstream` was not set.
+/// see `rf_bridge`): the configured upstream (if any), ingest counters, the
+/// bounded recent ring, and the current within-RF-domain fused inferences
+/// (`rf_bridge::current_inferences` — RuField's own room-state rules over
+/// this upstream's own verified events; needs no external pairing). Each
+/// ring entry is honestly tagged `verified` — an unverified event is visible
+/// here but excluded from fusion, never silently dropped or upgraded.
+/// `fused_into_worldgraph` is always `false`: this bridge does not (yet)
+/// correlate RF context against any biome environmental sample — see
+/// `rf_bridge`'s module docs for why that's a separate, still-unbuilt
+/// decision. Empty and idle when `--rf-upstream` was not set.
 async fn rf_context(State(state): State<GatewayState>) -> Json<Value> {
     let inner = state.inner.lock().await;
     Json(json!({
         "upstream": inner.rf_upstream,
-        "fused": false,
+        "fused_into_worldgraph": false,
         "stats": inner.rf_stats,
         "recent": inner.rf_recent.iter().collect::<Vec<_>>(),
+        "room_state_inferences": crate::rf_bridge::current_inferences(&inner.rf_fusion),
     }))
 }
 

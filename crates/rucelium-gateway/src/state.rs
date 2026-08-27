@@ -10,6 +10,7 @@
 use crate::config::GatewayConfig;
 use crate::journal;
 use crate::rf_bridge::{RfEntry, RfIngestStats};
+use rufield_fusion::RuFieldFusion;
 use rucelium_calibration::{
     AuthorityRegistry as CalibrationAuthorities, CalibrationAuthority, CalibrationError,
     CalibrationSigner, CalibrationStore, Calibrator, DriftDetector,
@@ -192,6 +193,11 @@ pub struct Inner {
     /// `GatewayConfig`, which the running daemon doesn't otherwise keep) so
     /// `GET /api/rf-context` can report what it's actually polling.
     pub rf_upstream: Option<String>,
+    /// Within-RF-domain fusion engine (`rf_bridge` module docs): combines
+    /// this upstream's own verified `FieldEvent`s into room-state inferences.
+    /// Needs no biome/WorldGraph pairing — see `rf_bridge` for why that's a
+    /// deliberately different, still-unbuilt kind of fusion.
+    pub rf_fusion: RuFieldFusion,
 }
 
 impl Inner {
@@ -299,6 +305,7 @@ impl Inner {
             rf_recent: VecDeque::new(),
             rf_stats: RfIngestStats::default(),
             rf_upstream: config.rf_upstream.clone(),
+            rf_fusion: RuFieldFusion::new(),
         })
     }
 

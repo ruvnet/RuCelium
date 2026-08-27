@@ -1,33 +1,47 @@
-//! RuView RF-context ingest (ADR-264 §8) — storage only, no fusion yet.
+//! RuView RF-context ingest (ADR-264 §8) — two *different* kinds of "fusion",
+//! only one of which this module does.
 //!
 //! Polls an external RuView `wifi-densepose-sensing-server`'s `GET
-//! /api/field` (ADR-262 P3), verifies each event's provenance receipt, and
-//! keeps a bounded ring of the resulting [`RfContext`]s for inspection via
+//! /api/field` (ADR-262 P3), verifies each event's provenance receipt, keeps
+//! a bounded ring of the resulting [`RfContext`]s, and runs verified events
+//! through [`rufield_fusion::RuFieldFusion`] to produce real room-state
+//! inferences (`person_present`, `motion`, …) — all exposed at
 //! `GET /api/rf-context`.
 //!
-//! ## What this deliberately does NOT do
+//! ## Two fusions, not one
 //!
-//! It does **not** call [`rucelium_worldgraph::fuse_rf_context`]. That
-//! function requires pairing an `RfContext` against a *specific* existing
-//! environmental sample's WorldGraph node to compute a
-//! [`rucelium_worldgraph::Plausibility`] verdict — and nothing in this
-//! codebase yet defines which biome zone or sensor a given RuView device's
-//! RF context is supposed to corroborate. Inventing that pairing here would
-//! be exactly the kind of fabricated correlation ADR-264 §8 and this
-//! project's honesty discipline exist to prevent. This module gets real,
-//! verified RF context flowing and visible; the zone-pairing design is
-//! deliberate follow-up work, not guessed at.
+//! * **`rufield_fusion::RuFieldFusion` (this module, real, wired in below)**
+//!   — a temporal-window fusion *within* the RF domain: it combines this
+//!   upstream's own `FieldEvent`s over a short window into inferences using
+//!   RuField's own rule set. It needs nothing external — no environmental
+//!   sample, no biome, no zone mapping — so there is nothing to fabricate.
+//!   This is the same engine `rufield-viewer` already runs on the exact same
+//!   event stream; wiring it here just makes the gateway able to answer
+//!   "what does this RF upstream currently think is happening" on its own.
+//! * **`rucelium_worldgraph::fuse_rf_context` (still NOT called here)** — a
+//!   *cross-domain* fusion: pairing an `RfContext` against a *specific*
+//!   existing environmental sample's WorldGraph node to compute a
+//!   [`rucelium_worldgraph::Plausibility`] verdict (does the RF context
+//!   support or contradict *that* biome sensor's reading). Nothing in this
+//!   codebase yet defines which biome zone/sensor a given RuView device is
+//!   supposed to corroborate, and inventing that pairing would be exactly
+//!   the fabricated correlation ADR-264 §8 exists to prevent. That
+//!   zone-pairing design is still deliberate follow-up work, not guessed at
+//!   — this module does not touch the WorldGraph.
 //!
 //! ## Honesty
 //!
-//! Every event is size-verified via [`rufield_provenance::is_fusable`] and
-//! tagged `verified: bool` accordingly — an unverified event is stored
-//! (visible, like a forged-data ✗ badge) but never silently upgraded. This
-//! module never fuses, so "verified" here is informational, not a use
-//! authorization.
+//! Every event is receipt-checked via [`rufield_provenance::is_fusable`] and
+//! tagged `verified: bool` in the stored ring — an unverified event is kept
+//! visible (like a forged-data ✗ badge) but is excluded from the fusion
+//! engine entirely (mirrors `rufield-viewer`'s own rule: forged data is never
+//! rendered as trusted). `/api/rf-context` reports
+//! `"fused_into_worldgraph": false` explicitly, so a consumer never has to
+//! infer the WorldGraph boundary from absence.
 
 use rucelium_worldgraph::RfContext;
-use rufield_core::FieldEvent;
+use rufield_core::{FieldEvent, FusionEngine, InferenceQuery};
+use rufield_fusion::RuFieldFusion;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::time::Duration;
@@ -92,10 +106,14 @@ struct ApiFieldPayload {
 }
 
 /// Pure ingest step (no I/O — unit-testable): fold one batch of freshly
-/// polled `FieldEvent`s into the bounded ring and the counters.
+/// polled `FieldEvent`s into the bounded ring, the counters, and the
+/// within-RF-domain fusion engine (module docs: this is the fusion that
+/// needs no external pairing, so it runs unconditionally on every verified
+/// event).
 pub fn ingest_events(
     recent: &mut VecDeque<RfEntry>,
     stats: &mut RfIngestStats,
+    fusion: &mut RuFieldFusion,
     events: &[FieldEvent],
     received_ns: u64,
 ) {
@@ -105,6 +123,10 @@ pub fn ingest_events(
         let verified = rufield_provenance::is_fusable(ev);
         if verified {
             stats.events_verified += 1;
+            // Mirrors rufield-viewer's own rule: only verified events reach
+            // the fusion engine. `ingest` itself re-checks §11 fusability
+            // (belt-and-suspenders), so forged data cannot reach it either way.
+            let _ = fusion.ingest(ev.clone());
         } else {
             stats.events_unverified += 1;
         }
@@ -128,6 +150,16 @@ pub fn ingest_events(
 /// malformed payload). Never fatal — the next tick tries again.
 pub fn record_poll_failure(stats: &mut RfIngestStats) {
     stats.poll_failures += 1;
+}
+
+/// Current room-state inferences from the within-RF-domain fusion engine
+/// (module docs: the fusion that needs no external pairing). Empty on a
+/// query error — `infer` errors only on the engine's own internal
+/// consistency checks, not on caller input, so this stays a best-effort read
+/// rather than a `Result` the HTTP handler has to plumb through.
+#[must_use]
+pub fn current_inferences(fusion: &RuFieldFusion) -> Vec<rufield_core::FieldInference> {
+    fusion.infer(&InferenceQuery::all()).unwrap_or_default()
 }
 
 /// Fetch and decode one `GET <upstream>/api/field` response. The only I/O in
@@ -172,7 +204,13 @@ pub async fn run_rf_ingest(state: GatewayState, upstream: String, poll_ms: u64) 
                 let received_ns = now_ns();
                 let mut guard = state.inner.lock().await;
                 let inner = &mut *guard;
-                ingest_events(&mut inner.rf_recent, &mut inner.rf_stats, &events, received_ns);
+                ingest_events(
+                    &mut inner.rf_recent,
+                    &mut inner.rf_stats,
+                    &mut inner.rf_fusion,
+                    &events,
+                    received_ns,
+                );
             }
             Err(e) => {
                 eprintln!("gateway: rf-context poll of {url} failed: {e}");
@@ -209,6 +247,10 @@ mod tests {
         observation
             .features
             .insert("motion_energy".to_string(), 0.7);
+        // "presence" is what `rufield-fusion`'s default `person_present` rule
+        // (rules/room_state.toml) actually keys on — without it the fusion
+        // regression tests below would pass trivially (no rule ever fires).
+        observation.features.insert("presence".to_string(), 0.8);
         let mut ev = FieldEvent::new(
             format!("ev-{device_id}"),
             1_000,
@@ -284,9 +326,10 @@ mod tests {
     fn verified_wifi_csi_event_is_stored_and_counted() {
         let mut recent = VecDeque::new();
         let mut stats = RfIngestStats::default();
+        let mut fusion = RuFieldFusion::new();
         let ev = wifi_csi_event("node-1", true);
 
-        ingest_events(&mut recent, &mut stats, std::slice::from_ref(&ev), 5_000);
+        ingest_events(&mut recent, &mut stats, &mut fusion, std::slice::from_ref(&ev), 5_000);
 
         assert_eq!(recent.len(), 1);
         assert!(recent[0].verified);
@@ -303,9 +346,10 @@ mod tests {
     fn unsigned_event_is_stored_but_flagged_unverified() {
         let mut recent = VecDeque::new();
         let mut stats = RfIngestStats::default();
+        let mut fusion = RuFieldFusion::new();
         let ev = wifi_csi_event("node-2", false);
 
-        ingest_events(&mut recent, &mut stats, std::slice::from_ref(&ev), 1);
+        ingest_events(&mut recent, &mut stats, &mut fusion, std::slice::from_ref(&ev), 1);
 
         assert_eq!(recent.len(), 1, "unverified events are still visible, not dropped");
         assert!(!recent[0].verified);
@@ -317,9 +361,10 @@ mod tests {
     fn non_wifi_csi_event_is_not_stored_as_rf_context() {
         let mut recent = VecDeque::new();
         let mut stats = RfIngestStats::default();
+        let mut fusion = RuFieldFusion::new();
         let ev = other_modality_event();
 
-        ingest_events(&mut recent, &mut stats, std::slice::from_ref(&ev), 1);
+        ingest_events(&mut recent, &mut stats, &mut fusion, std::slice::from_ref(&ev), 1);
 
         assert!(recent.is_empty());
         assert_eq!(stats.events_other_modality, 1);
@@ -330,9 +375,10 @@ mod tests {
     fn ring_is_bounded_and_drops_oldest() {
         let mut recent = VecDeque::new();
         let mut stats = RfIngestStats::default();
+        let mut fusion = RuFieldFusion::new();
         for i in 0..(RF_RECENT_CAPACITY + 10) {
             let ev = wifi_csi_event(&format!("node-{i}"), true);
-            ingest_events(&mut recent, &mut stats, std::slice::from_ref(&ev), i as u64);
+            ingest_events(&mut recent, &mut stats, &mut fusion, std::slice::from_ref(&ev), i as u64);
         }
         assert_eq!(recent.len(), RF_RECENT_CAPACITY);
         // Oldest entries evicted first: the front should be from late in the
@@ -341,6 +387,39 @@ mod tests {
         assert_eq!(
             recent.back().unwrap().context.device_id,
             format!("node-{}", RF_RECENT_CAPACITY + 9)
+        );
+    }
+
+    #[test]
+    fn verified_events_actually_reach_the_fusion_engine() {
+        let mut recent = VecDeque::new();
+        let mut stats = RfIngestStats::default();
+        let mut fusion = RuFieldFusion::new();
+        let ev = wifi_csi_event("node-fused", true);
+
+        ingest_events(&mut recent, &mut stats, &mut fusion, std::slice::from_ref(&ev), 1);
+
+        let inferences = current_inferences(&fusion);
+        assert!(
+            inferences.iter().any(|i| i.label == "person_present"),
+            "a verified presence-bearing event should produce a person_present \
+             inference from RuField's own default room-state rules, got: {inferences:?}"
+        );
+    }
+
+    #[test]
+    fn unverified_events_never_reach_the_fusion_engine() {
+        let mut recent = VecDeque::new();
+        let mut stats = RfIngestStats::default();
+        let mut fusion = RuFieldFusion::new();
+        let ev = wifi_csi_event("node-forged", false);
+
+        ingest_events(&mut recent, &mut stats, &mut fusion, std::slice::from_ref(&ev), 1);
+
+        let inferences = current_inferences(&fusion);
+        assert!(
+            inferences.is_empty(),
+            "an unverified event must never influence a fused inference, got: {inferences:?}"
         );
     }
 

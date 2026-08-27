@@ -986,6 +986,7 @@ dependencies = [
  "rucelium-transport",
  "rucelium-worldgraph",
  "rufield-core",
+ "rufield-fusion",
  "rufield-provenance",
  "rustls",
  "serde",
