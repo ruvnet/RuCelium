@@ -156,7 +156,7 @@ pub async fn spawn_gateway_with_transport(
     let mut tasks = Vec::new();
     tasks.push(tokio::spawn(net::run_udp(udp, state.clone())));
 
-    let router = api::router(state.clone());
+    let router = api::router(state.clone(), &config.dashboard_origins)?;
     tasks.push(tokio::spawn(async move {
         if let Err(e) = axum::serve(listener, router).await {
             eprintln!("gateway: http server error: {e}");

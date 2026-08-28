@@ -71,6 +71,15 @@ pub struct GatewayConfig {
     /// Poll interval for the RF-context bridge, in milliseconds. Unused when
     /// `rf_upstream` is `None`.
     pub rf_poll_ms: u64,
+    /// Browser origins allowed to read the two dashboard endpoints
+    /// (`/api/rf-context`, `/api/stats`) cross-origin (repeatable
+    /// `--dashboard-origin`, e.g. `http://127.0.0.1:8090`). Empty (default)
+    /// means no CORS headers are emitted at all — a browser page on any
+    /// other origin cannot read them, same as every other route on this
+    /// gateway. This is a browser-confidentiality control, not an auth
+    /// control: every route stays unauthenticated at the network layer
+    /// regardless of this setting (module docs).
+    pub dashboard_origins: Vec<String>,
 }
 
 impl Default for GatewayConfig {
@@ -91,6 +100,7 @@ impl Default for GatewayConfig {
             fsync: DEFAULT_FSYNC,
             rf_upstream: None,
             rf_poll_ms: DEFAULT_RF_POLL_MS,
+            dashboard_origins: Vec::new(),
         }
     }
 }
@@ -145,6 +155,9 @@ impl GatewayConfig {
                 "--rf-poll-ms" => {
                     config.rf_poll_ms = parse_num(&value("--rf-poll-ms")?, "--rf-poll-ms")?;
                 }
+                "--dashboard-origin" => config
+                    .dashboard_origins
+                    .push(value("--dashboard-origin")?),
                 unknown => return Err(format!("unknown flag {unknown}")),
             }
         }
@@ -187,6 +200,10 @@ mod tests {
         assert!(c.fsync, "the daemon fsyncs accepted appends by default");
         assert_eq!(c.rf_upstream, None, "the RF bridge is opt-in, off by default");
         assert_eq!(c.rf_poll_ms, 500);
+        assert!(
+            c.dashboard_origins.is_empty(),
+            "no browser origin is CORS-allowed by default"
+        );
     }
 
     #[test]
@@ -232,6 +249,8 @@ mod tests {
             "http://127.0.0.1:8080",
             "--rf-poll-ms",
             "250",
+            "--dashboard-origin",
+            "http://127.0.0.1:8090",
         ]))
         .unwrap();
         assert_eq!(c.biome_id, "biome/x");
@@ -247,6 +266,7 @@ mod tests {
         assert!(!c.fsync);
         assert_eq!(c.rf_upstream, Some("http://127.0.0.1:8080".to_string()));
         assert_eq!(c.rf_poll_ms, 250);
+        assert_eq!(c.dashboard_origins, vec!["http://127.0.0.1:8090"]);
     }
 
     #[test]
@@ -259,6 +279,21 @@ mod tests {
         ]))
         .unwrap();
         assert_eq!(c.peers, vec!["http://a:7465", "http://b:7465"]);
+    }
+
+    #[test]
+    fn dashboard_origin_is_repeatable_in_order() {
+        let c = GatewayConfig::from_args(args(&[
+            "--dashboard-origin",
+            "http://127.0.0.1:8090",
+            "--dashboard-origin",
+            "http://localhost:8090",
+        ]))
+        .unwrap();
+        assert_eq!(
+            c.dashboard_origins,
+            vec!["http://127.0.0.1:8090", "http://localhost:8090"]
+        );
     }
 
     #[test]
