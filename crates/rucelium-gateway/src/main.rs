@@ -14,7 +14,8 @@ async fn main() {
                 "usage: rucelium-gateway [--biome-id <s>] [--udp <port>] [--http <port>] \
                  [--data-dir <path>] [--peer <url>]... [--simulate <n>] [--seed <u64>] \
                  [--sim-interval-ms <u64>] [--retention-check-secs <u64>] \
-                 [--federation-poll-ms <u64>] [--actuator <id>] [--fsync <bool>]"
+                 [--federation-poll-ms <u64>] [--actuator <id>] [--fsync <bool>] \
+                 [--rf-upstream <url>] [--rf-poll-ms <u64>]"
             );
             std::process::exit(2);
         }
@@ -34,6 +35,10 @@ async fn main() {
         for peer in &config.peers {
             println!("  peer:       {peer}");
         }
+    }
+    match &config.rf_upstream {
+        Some(url) => println!("  rf-context: polling {url} every {}ms (ADR-264 §8)", config.rf_poll_ms),
+        None => println!("  rf-context: disabled (set --rf-upstream <url> to enable)"),
     }
     println!("  WARNING: admin endpoints are UNAUTHENTICATED in v0.1 — bind");
     println!("           the http port to localhost or firewall it.");
