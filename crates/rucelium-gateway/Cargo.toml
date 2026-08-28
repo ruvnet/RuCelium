@@ -34,6 +34,12 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 axum = "0.7"
+# CORS (dev-only, v0.1 posture): lets a same-machine dashboard served from a
+# different origin/port (e.g. RuView's ui/) read this gateway's JSON. See
+# `api::router`'s doc comment for scope/limits — matches this crate's
+# existing "admin endpoints unauthenticated, bind to localhost" posture
+# rather than adding a new one.
+tower-http = { version = "0.6", features = ["cors"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "signal", "sync"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 

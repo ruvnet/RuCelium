@@ -21,9 +21,10 @@ use crate::federation::{accept_artifact, ArtifactEffect, ArtifactRejection};
 use crate::state::{now_ns, GatewayState};
 use crate::transport::FederationArtifact;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{Method, StatusCode};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use tower_http::cors::{Any, CorsLayer};
 use rucelium_core::EventKind;
 use rucelium_federation::{project_sample, SensorThingsBundle};
 use rucelium_policy::ControlError;
@@ -60,6 +61,22 @@ struct WindowParam {
     window_s: Option<u64>,
 }
 
+/// CORS for `router`'s response, kept as its own function so the policy is
+/// named and testable in isolation: read-only (`GET`), any origin, no
+/// credentials — lets a same-machine dashboard served from a different
+/// origin/port (e.g. RuView's `ui/`, on a different HTTP port) read this
+/// gateway's JSON without a proxy. This adds no new exposure beyond what
+/// already exists: every route here is unauthenticated in v0.1 regardless of
+/// the requester's origin (module docs), so a browser's same-origin policy
+/// was never the thing standing between this data and an arbitrary reader —
+/// it only ever stopped an arbitrary *page* from reading it in an arbitrary
+/// *browser tab*. Revisit when the admin endpoints gain real authentication.
+fn cors_layer() -> CorsLayer {
+    CorsLayer::new()
+        .allow_methods([Method::GET])
+        .allow_origin(Any)
+}
+
 /// Build the gateway's axum router (see module docs for the endpoint list
 /// and the v0.1 admin-endpoint security posture).
 pub fn router(state: GatewayState) -> Router {
@@ -79,6 +96,7 @@ pub fn router(state: GatewayState) -> Router {
         .route("/api/admin/revoke/:node_id", post(admin_revoke))
         .route("/api/admin/command", post(admin_command))
         .with_state(state)
+        .layer(cors_layer())
 }
 
 /// `GET /health` — liveness.
