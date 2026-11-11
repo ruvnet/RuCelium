@@ -14,7 +14,8 @@ async fn main() {
                 "usage: rucelium-gateway [--biome-id <s>] [--udp <port>] [--http <port>] \
                  [--data-dir <path>] [--peer <url>]... [--simulate <n>] [--seed <u64>] \
                  [--sim-interval-ms <u64>] [--retention-check-secs <u64>] \
-                 [--federation-poll-ms <u64>] [--actuator <id>] [--fsync <bool>]"
+                 [--federation-poll-ms <u64>] [--actuator <id>] [--fsync <bool>] \
+                 [--rf-upstream <url>] [--rf-poll-ms <u64>] [--dashboard-origin <origin>]..."
             );
             std::process::exit(2);
         }
@@ -33,6 +34,17 @@ async fn main() {
     } else {
         for peer in &config.peers {
             println!("  peer:       {peer}");
+        }
+    }
+    match &config.rf_upstream {
+        Some(url) => println!("  rf-context: polling {url} every {}ms (ADR-264 §8)", config.rf_poll_ms),
+        None => println!("  rf-context: disabled (set --rf-upstream <url> to enable)"),
+    }
+    if config.dashboard_origins.is_empty() {
+        println!("  dashboard:  CORS disabled (no browser origin can read /api/rf-context or /api/stats cross-origin)");
+    } else {
+        for origin in &config.dashboard_origins {
+            println!("  dashboard:  CORS allowed for {origin} (GET /api/rf-context, /api/stats only)");
         }
     }
     println!("  WARNING: admin endpoints are UNAUTHENTICATED in v0.1 — bind");

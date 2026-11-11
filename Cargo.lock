@@ -994,11 +994,15 @@ dependencies = [
  "rucelium-store",
  "rucelium-transport",
  "rucelium-worldgraph",
+ "rufield-core",
+ "rufield-fusion",
+ "rufield-provenance",
  "rustls",
  "serde",
  "serde_json",
  "tokio",
  "tower",
+ "tower-http",
 ]
 
 [[package]]

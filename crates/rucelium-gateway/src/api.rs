@@ -21,9 +21,10 @@ use crate::federation::{accept_artifact, ArtifactEffect, ArtifactRejection};
 use crate::state::{now_ns, GatewayState};
 use crate::transport::FederationArtifact;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderValue, Method, StatusCode};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use tower_http::cors::CorsLayer;
 use rucelium_core::EventKind;
 use rucelium_federation::{project_sample, SensorThingsBundle};
 use rucelium_policy::ControlError;
@@ -60,12 +61,50 @@ struct WindowParam {
     window_s: Option<u64>,
 }
 
+/// CORS for the two dashboard read routes ONLY (`/api/rf-context`,
+/// `/api/stats`) — never applied to the rest of the router. Read-only
+/// (`GET`), no credentials, and origin-gated: `origins` is the
+/// `--dashboard-origin` allowlist (empty by default), so no browser origin
+/// gets a cross-origin read until an operator explicitly configures one
+/// (e.g. `http://127.0.0.1:8090`, RuView's own `ui/` origin). An empty
+/// allowlist means [`CorsLayer`] emits no `Access-Control-Allow-Origin`
+/// header at all, so an unconfigured deployment behaves exactly as it did
+/// before this existed: no cross-origin browser reads of anything.
+///
+/// This is deliberately scoped to two routes, not the whole router: the
+/// admin, federation, observation, and event surfaces stay same-origin-only
+/// in the browser regardless of this setting. Every route is still
+/// unauthenticated at the network layer in v0.1 (module docs) — this
+/// setting only ever controls what an arbitrary *page* can read from inside
+/// an arbitrary *browser tab*, not what curl/any non-browser client can
+/// already read.
+fn dashboard_cors_layer(origins: &[String]) -> Result<CorsLayer, String> {
+    let layer = CorsLayer::new().allow_methods([Method::GET]);
+    if origins.is_empty() {
+        return Ok(layer);
+    }
+    let mut allowed = Vec::with_capacity(origins.len());
+    for origin in origins {
+        let value = HeaderValue::from_str(origin)
+            .map_err(|e| format!("invalid --dashboard-origin {origin:?}: {e}"))?;
+        allowed.push(value);
+    }
+    Ok(layer.allow_origin(allowed))
+}
+
 /// Build the gateway's axum router (see module docs for the endpoint list
-/// and the v0.1 admin-endpoint security posture).
-pub fn router(state: GatewayState) -> Router {
-    Router::new()
-        .route("/health", get(health))
+/// and the v0.1 admin-endpoint security posture). `dashboard_origins` is the
+/// `--dashboard-origin` CORS allowlist for `/api/rf-context` and
+/// `/api/stats` only (see [`dashboard_cors_layer`]); pass `&[]` to disable
+/// cross-origin browser reads entirely (the default).
+pub fn router(state: GatewayState, dashboard_origins: &[String]) -> Result<Router, String> {
+    let dashboard = Router::new()
+        .route("/api/rf-context", get(rf_context))
         .route("/api/stats", get(stats))
+        .route_layer(dashboard_cors_layer(dashboard_origins)?);
+
+    let router = Router::new()
+        .route("/health", get(health))
         .route("/api/observations/recent", get(observations_recent))
         .route("/api/events", get(events_recent))
         .route("/api/sensorthings/Things", get(st_things))
@@ -78,7 +117,9 @@ pub fn router(state: GatewayState) -> Router {
         .route("/api/federation/announce", post(fed_announce))
         .route("/api/admin/revoke/:node_id", post(admin_revoke))
         .route("/api/admin/command", post(admin_command))
-        .with_state(state)
+        .merge(dashboard)
+        .with_state(state);
+    Ok(router)
 }
 
 /// `GET /health` — liveness.
@@ -121,6 +162,32 @@ async fn stats(State(state): State<GatewayState>) -> Json<Value> {
         "backfills": inner.push.backfills,
         "push": inner.push,
         "known_peers": inner.known_peers.len(),
+    }))
+}
+
+/// `GET /api/rf-context` — the RuView RF-context bridge's state (ADR-264 §8,
+/// see `rf_bridge`): the configured upstream (if any), ingest counters, the
+/// bounded recent ring, the current within-RF-domain fused inferences
+/// (`rf_bridge::current_inferences` — RuField's own room-state rules over
+/// this upstream's own verified events; needs no external pairing), and a
+/// bounded history of past inference snapshots so a transient inference is
+/// still visible after its own TTL expires (in-memory only — does not
+/// survive a restart; see [`crate::rf_bridge::InferenceSnapshot`] docs for
+/// why not durable yet). Each ring entry is honestly tagged `verified` — an unverified event
+/// is visible here but excluded from fusion, never silently dropped or
+/// upgraded. `fused_into_worldgraph` is always `false`: this bridge does not
+/// (yet) correlate RF context against any biome environmental sample — see
+/// `rf_bridge`'s module docs for why that's a separate, still-unbuilt
+/// decision. Empty and idle when `--rf-upstream` was not set.
+async fn rf_context(State(state): State<GatewayState>) -> Json<Value> {
+    let inner = state.inner.lock().await;
+    Json(json!({
+        "upstream": inner.rf_upstream,
+        "fused_into_worldgraph": false,
+        "stats": inner.rf_stats,
+        "recent": inner.rf_recent.iter().collect::<Vec<_>>(),
+        "room_state_inferences": crate::rf_bridge::current_inferences(&inner.rf_fusion),
+        "inference_history": inner.rf_inference_history.iter().collect::<Vec<_>>(),
     }))
 }
 

@@ -14,7 +14,18 @@
 //!            ──► /api/federation/{pubkey,summary,revocations,peers}
 //!            ──► /api/federation/announce   (push inbox, ADR-269 §3)
 //!            ──► /api/admin/{revoke/:node_id,command}
+//!            ──► /api/rf-context            (ADR-264 §8, see `rf_bridge`)
 //! ```
+//!
+//! ## RuView RF context (ADR-264 §8)
+//!
+//! `--rf-upstream <url>` starts [`rf_bridge::run_rf_ingest`]: it polls a
+//! RuView `wifi-densepose-sensing-server`'s `/api/field` (ADR-262 P3),
+//! verifies each event's provenance receipt, and keeps a bounded, honestly
+//! verified/unverified-tagged ring at `GET /api/rf-context`. This is storage
+//! only — it does **not** fuse into the WorldGraph yet; see [`rf_bridge`]'s
+//! module docs for why that pairing decision is deliberately not guessed at
+//! here.
 //!
 //! ## Push federation (ADR-269 §3)
 //!
@@ -61,6 +72,7 @@ pub mod federation;
 pub mod journal;
 pub mod net;
 pub mod pipeline;
+pub mod rf_bridge;
 pub mod simulate;
 pub mod state;
 pub mod transport;
@@ -144,7 +156,7 @@ pub async fn spawn_gateway_with_transport(
     let mut tasks = Vec::new();
     tasks.push(tokio::spawn(net::run_udp(udp, state.clone())));
 
-    let router = api::router(state.clone());
+    let router = api::router(state.clone(), &config.dashboard_origins)?;
     tasks.push(tokio::spawn(async move {
         if let Err(e) = axum::serve(listener, router).await {
             eprintln!("gateway: http server error: {e}");
@@ -182,6 +194,14 @@ pub async fn spawn_gateway_with_transport(
             config.seed,
             config.sim_interval_ms,
             udp_port,
+        )));
+    }
+
+    if let Some(upstream) = config.rf_upstream.clone() {
+        tasks.push(tokio::spawn(rf_bridge::run_rf_ingest(
+            state.clone(),
+            upstream,
+            config.rf_poll_ms,
         )));
     }
 
